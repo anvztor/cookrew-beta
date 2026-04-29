@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MobileApp } from './app/MobileApp'
+import { AuthProvider } from './lib/auth/useAuth'
 import './styles/tokens.css'
 
 const rootEl = document.getElementById('root')
@@ -10,6 +11,8 @@ if (!rootEl) {
 
 createRoot(rootEl).render(
   <StrictMode>
-    <MobileApp />
+    <AuthProvider>
+      <MobileApp />
+    </AuthProvider>
   </StrictMode>,
 )
