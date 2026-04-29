@@ -1,21 +1,76 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { CR_EVENTS } from '../data/roster'
 import type { Variant } from './party-sidebar'
+import { streamTask } from '../lib/api/krewhub-client'
 
 interface CrEventFeedProps {
   variant?: Variant
   onClose?: () => void
+  // Auth track A2: when set, the feed subscribes to /tasks/{id}/stream
+  // and prepends live events to the legacy mock CR_EVENTS list.
+  taskId?: string
 }
 
-export function CrEventFeed({ variant = 'desktop', onClose }: CrEventFeedProps) {
+interface LiveEvent {
+  t: string
+  src: string
+  msg: string
+  kind?: 'block' | 'done' | 'info'
+}
+
+export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFeedProps) {
   const [filter, setFilter] = useState<string>('ALL')
+  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([])
   const isMobile = variant === 'mobile'
 
-  const events = useMemo(
-    () => (filter === 'ALL' ? CR_EVENTS : CR_EVENTS.filter((e) => e.src === filter)),
-    [filter],
+  useEffect(() => {
+    if (!taskId) return
+    const es = streamTask(taskId)
+    const onMessage = (ev: MessageEvent) => {
+      try {
+        const data = JSON.parse(ev.data) as {
+          kind?: string
+          payload?: Record<string, unknown>
+        }
+        const ts = new Date().toLocaleTimeString().slice(0, 8)
+        const kind = data.kind ?? 'event'
+        const summary =
+          (data.payload && typeof data.payload === 'object'
+            ? JSON.stringify(data.payload).slice(0, 120)
+            : '') || ''
+        setLiveEvents((cur) => [
+          ...cur,
+          {
+            t: ts,
+            src: 'TASK',
+            msg: `${kind} ${summary}`.trim(),
+            kind: kind === 'task.completed' ? 'done' : 'info',
+          },
+        ])
+      } catch {
+        // ignore malformed events
+      }
+    }
+    es.addEventListener('message', onMessage)
+    return () => {
+      es.removeEventListener('message', onMessage)
+      es.close()
+    }
+  }, [taskId])
+
+  const allEvents: LiveEvent[] = useMemo(
+    () =>
+      [...liveEvents, ...CR_EVENTS] as LiveEvent[],
+    [liveEvents],
   )
-  const sources = useMemo(() => ['ALL', ...new Set(CR_EVENTS.map((e) => e.src))], [])
+  const events = useMemo(
+    () => (filter === 'ALL' ? allEvents : allEvents.filter((e) => e.src === filter)),
+    [allEvents, filter],
+  )
+  const sources = useMemo(
+    () => ['ALL', ...new Set(allEvents.map((e) => e.src))],
+    [allEvents],
+  )
 
   const btnStyle: React.CSSProperties = {
     background: 'transparent',
