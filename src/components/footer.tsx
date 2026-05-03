@@ -321,6 +321,7 @@ export function CrFooter({ variant = 'desktop', onSend }: CrFooterProps) {
   const [mode, setMode] = useState('orch')
   const isMobile = variant === 'mobile'
   const devIns = detectDeviceInsets()
+  const readyAgents = CR_ROSTER.filter((r) => r.kind === 'agent' && r.status !== 'off').length
 
   return (
     <footer
@@ -378,9 +379,9 @@ export function CrFooter({ variant = 'desktop', onSend }: CrFooterProps) {
             borderTop: '1.5px dashed var(--line-soft)',
           }}
         >
-          <CrLED state="on" />
+          <CrLED state={readyAgents > 0 ? 'on' : 'off'} />
           <span className="cr-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
-            3 AGENTS READY
+            {readyAgents} AGENTS READY
           </span>
           <span style={{ flex: 1 }} />
           <CrChip tone="slate">⌘K SLASH</CrChip>

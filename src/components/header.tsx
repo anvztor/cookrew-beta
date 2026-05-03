@@ -131,9 +131,9 @@ interface CrHeaderProps {
 
 export function CrHeader({
   variant = 'desktop',
-  bundle = 'BUNDLE 4A2C',
-  online = 4,
-  total = 5,
+  bundle = '',
+  online = 0,
+  total = 0,
   onMenu,
   onAvatar,
   onParty,

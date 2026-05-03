@@ -1,5 +1,7 @@
-// PKCE-based auth client. Talks to krewauth (token issuer) for the redirect
-// flow and to krewhub (relying party) for /me + /auth/logout.
+// OAuth2 + PKCE auth client. cookrew-beta redirects to krewauth's hosted
+// login page (auth.cookrew.dev) for sign-in; krewauth issues an auth code
+// which we exchange for a httpOnly session cookie on .cookrew.dev.
+
 import { challengeFromVerifier, generateVerifier } from './pkce'
 
 const KREWAUTH = (import.meta.env.VITE_KREWAUTH_URL as string | undefined) ?? 'http://localhost:8421'
@@ -8,9 +10,16 @@ const CLIENT_ID = 'cookrew-beta'
 
 const VERIFIER_KEY = 'krewauth_pkce_verifier'
 const STATE_KEY = 'krewauth_pkce_state'
+const RETURN_TO_KEY = 'krewauth_return_to'
 
 function getRedirectUri(): string {
   return `${window.location.origin}/auth/callback`
+}
+
+export interface Account {
+  account_id: string
+  auth_method: string
+  username?: string | null
 }
 
 export async function redirectToLogin(): Promise<void> {
@@ -19,6 +28,12 @@ export async function redirectToLogin(): Promise<void> {
   const state = generateVerifier().slice(0, 16)
   sessionStorage.setItem(VERIFIER_KEY, verifier)
   sessionStorage.setItem(STATE_KEY, state)
+  // Stash the path to return to so the callback lands back on the same page.
+  const here = window.location.pathname + window.location.search + window.location.hash
+  if (here && here !== '/auth/callback') {
+    sessionStorage.setItem(RETURN_TO_KEY, here)
+  }
+
   const url = new URL(`${KREWAUTH}/oauth/authorize`)
   url.searchParams.set('client_id', CLIENT_ID)
   url.searchParams.set('redirect_uri', getRedirectUri())
@@ -33,6 +48,7 @@ export async function exchangeCode(code: string, state: string): Promise<void> {
   const expected = sessionStorage.getItem(STATE_KEY)
   if (!verifier) throw new Error('missing_verifier')
   if (state !== expected) throw new Error('bad_state')
+
   const r = await fetch(`${KREWAUTH}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -50,10 +66,10 @@ export async function exchangeCode(code: string, state: string): Promise<void> {
   sessionStorage.removeItem(STATE_KEY)
 }
 
-export interface Account {
-  account_id: string
-  auth_method: string
-  username?: string | null
+export function consumeReturnTo(): string {
+  const v = sessionStorage.getItem(RETURN_TO_KEY) ?? '/'
+  sessionStorage.removeItem(RETURN_TO_KEY)
+  return v
 }
 
 export async function me(): Promise<Account | null> {

@@ -7,9 +7,8 @@ import {
 import { CrButton, CrChip, CrLED } from './atoms/atoms'
 import { CR_HITL, CR_STATUS, CR_TASKS, type HitlItem, type Task } from '../data/tasks'
 import type { Variant } from './party-sidebar'
-import { MissionComposer } from './mission-composer'
 import { TaskLiveCard } from './task-live-card'
-import type { Sandbox, Task as ApiTask } from '../lib/api/krewhub-client'
+import type { Task as ApiTask } from '../lib/api/krewhub-client'
 
 interface CrBundleTitleProps {
   bundle?: string
@@ -23,12 +22,12 @@ interface CrBundleTitleProps {
 }
 
 export function CrBundleTitle({
-  bundle = 'BUN_4A2C',
-  name = 'Heartbeat reliability sweep',
-  total = 11,
-  blocked = 1,
-  working = 2,
-  done = 1,
+  bundle = '',
+  name = '',
+  total = 0,
+  blocked = 0,
+  working = 0,
+  done = 0,
   variant = 'desktop',
   onNew,
 }: CrBundleTitleProps) {
@@ -481,12 +480,9 @@ interface CrMissionBoardProps {
   hitl?: HitlItem[]
   onNewQuest?: () => void
   onSelectTask?: (t: Task | HitlItem) => void
-  // Auth track A2 — when set, the mission-composer is rendered at the
-  // bottom of the board and posts to POST /bundles/{bundleId}/tasks.
-  // Created tasks render as TaskLiveCards underneath the existing canvas.
-  bundleId?: string
-  onTaskCreated?: (task: ApiTask, sandbox: Sandbox) => void
-  onNeedsAgent?: () => void
+  // Auth track A2 — created tasks render as TaskLiveCards underneath the
+  // canvas. Task creation now lives in the parent (driven by CrFooter).
+  liveTasks?: ApiTask[]
 }
 
 export function CrMissionBoard({
@@ -495,22 +491,8 @@ export function CrMissionBoard({
   hitl = CR_HITL,
   onNewQuest,
   onSelectTask,
-  bundleId,
-  onTaskCreated,
-  onNeedsAgent,
+  liveTasks = [],
 }: CrMissionBoardProps) {
-  const [liveTasks, setLiveTasks] = useState<ApiTask[]>([])
-  const composerRef = useRef<HTMLInputElement | null>(null)
-
-  const handleCreated = (task: ApiTask, sandbox: Sandbox) => {
-    setLiveTasks((cur) => [...cur, task])
-    onTaskCreated?.(task, sandbox)
-  }
-
-  const handleVoidDoubleClick = () => {
-    composerRef.current?.focus()
-  }
-
   return (
     <div
       className="cr"
@@ -539,7 +521,6 @@ export function CrMissionBoard({
           display: 'flex',
           flexDirection: 'column',
         }}
-        onDoubleClick={bundleId ? handleVoidDoubleClick : undefined}
       >
         <CrTaskCanvas tasks={tasks} variant={variant} onSelect={onSelectTask} />
         {liveTasks.length > 0 && (
@@ -553,14 +534,6 @@ export function CrMissionBoard({
           <CrHITLClickbar items={hitl} variant={variant} onRestore={onSelectTask} />
         )}
       </div>
-      {bundleId && (
-        <MissionComposer
-          ref={composerRef}
-          bundleId={bundleId}
-          onCreated={handleCreated}
-          onNeedsAgent={onNeedsAgent}
-        />
-      )}
     </div>
   )
 }

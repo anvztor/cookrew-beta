@@ -1,17 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CallbackScreen } from '../components/auth-view/callback-screen'
-import { LoginScreen } from '../components/auth-view/login-screen'
 import { CrEventFeed } from '../components/event-feed'
 import { CrFooter } from '../components/footer'
 import { CrHeader } from '../components/header'
 import { CrMissionBoard } from '../components/mission-board'
 import { CrPartySidebar } from '../components/party-sidebar'
+import { redirectToLogin } from '../lib/auth/auth-client'
 import { useAuth } from '../lib/auth/useAuth'
-import type { Task as ApiTask } from '../lib/api/krewhub-client'
+import { createTask, type Task as ApiTask } from '../lib/api/krewhub-client'
 
-// Auth track A2 — placeholder current bundle id. Auth track A1 will
-// supply this from useAuth() / current-bundle aggregate; for now we
-// read from VITE_KREWHUB_DEV_BUNDLE_ID with a fake-auth default.
+// cookrew-beta is workspace-only. Anon users are redirected to krewauth
+// for sign-in; this app never renders a login form. The /auth/callback
+// path is the one-shot return point for the OAuth code exchange.
+
 const DEV_BUNDLE_ID =
   (import.meta.env.VITE_KREWHUB_DEV_BUNDLE_ID as string | undefined) ?? 'BUN_DEV1'
 
@@ -20,14 +21,43 @@ export function MobileApp() {
   const [partyOpen, setPartyOpen] = useState(false)
   const [feedOpen, setFeedOpen] = useState(false)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  const [liveTasks, setLiveTasks] = useState<ApiTask[]>([])
+  const [shipError, setShipError] = useState<string | null>(null)
 
-  // Plain pathname routing — no router lib.
+  const handleShip = async ({ text }: { mode: string; text: string }) => {
+    const title = text.trim()
+    if (!title) return
+    try {
+      const { task } = await createTask(DEV_BUNDLE_ID, title)
+      setLiveTasks((cur) => [...cur, task])
+      setActiveTaskId(task.id)
+      setFeedOpen(true)
+      setShipError(null)
+    } catch (e) {
+      const err = e as { code?: string; message?: string }
+      setShipError(
+        err.code === 'no_paired_agent'
+          ? 'Hire an agent first'
+          : err.message ?? 'Failed to ship',
+      )
+    }
+  }
+
+  // When the auth check finishes and we're anon, kick straight to krewauth.
+  // We only fire once per anon transition — redirectToLogin sets
+  // window.location, so React re-renders are interrupted by the navigation.
+  useEffect(() => {
+    if (state.status === 'anon' && window.location.pathname !== '/auth/callback') {
+      void redirectToLogin()
+    }
+  }, [state.status])
+
   const path = window.location.pathname
   if (path === '/auth/callback') {
     return <CallbackScreen />
   }
 
-  if (state.status === 'loading') {
+  if (state.status === 'loading' || state.status === 'anon') {
     return (
       <div
         style={{
@@ -40,20 +70,12 @@ export function MobileApp() {
           justifyContent: 'center',
         }}
       >
-        Loading…
+        {state.status === 'anon' ? 'Redirecting to sign-in…' : 'Loading…'}
       </div>
     )
   }
 
-  if (state.status === 'anon') {
-    return (
-      <div className="cr cr-app" data-screen-label="Auth · Mobile">
-        <LoginScreen variant="mobile" />
-      </div>
-    )
-  }
-
-  // Authed: render the workspace. Track A2 mounts mission-composer inside this branch.
+  // Authed: workspace.
   const closeDrawers = () => {
     setPartyOpen(false)
     setFeedOpen(false)
@@ -65,9 +87,6 @@ export function MobileApp() {
     <div className={cls} data-screen-label="Arcade · Mobile">
       <CrHeader
         variant="mobile"
-        bundle="BUN_4A2C"
-        online={4}
-        total={5}
         partyOpen={partyOpen}
         feedOpen={feedOpen}
         onMenu={() => {
@@ -81,16 +100,22 @@ export function MobileApp() {
         onAvatar={() => void logout()}
       />
       <div className="cr-stage">
-        <CrMissionBoard
-          variant="mobile"
-          bundleId={DEV_BUNDLE_ID}
-          onTaskCreated={(task: ApiTask) => {
-            setActiveTaskId(task.id)
-            setFeedOpen(true)
-          }}
-        />
+        <CrMissionBoard variant="mobile" liveTasks={liveTasks} />
       </div>
-      <CrFooter variant="mobile" />
+      {shipError && (
+        <div
+          style={{
+            padding: '6px 12px',
+            background: 'var(--cream-hi, #faf6ec)',
+            color: 'crimson',
+            fontSize: 12,
+            borderTop: '1.5px dashed var(--line-soft)',
+          }}
+        >
+          {shipError}
+        </div>
+      )}
+      <CrFooter variant="mobile" onSend={(p) => void handleShip(p)} />
 
       <div className="cr-scrim" onClick={closeDrawers} />
       <div className="cr-drawer left">
