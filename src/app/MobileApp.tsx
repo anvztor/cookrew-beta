@@ -173,11 +173,27 @@ export function MobileApp() {
 
   // ── 2. Bundle bootstrap: list bundles for the configured recipe ──
   // Real bundles only — no frontend-only `BUN_4A2C` placeholder.
+  // Filters to bundles the caller actually owns (legacy bundles with
+  // owner_account_id="<username>" instead of "<account_id>" 403 every
+  // task creation; we hide them from the UI to avoid the "task stays
+  // UNCLAIMED" trap on double-click + ship). Sorts newest-first so the
+  // default active tab is one we just created.
   const refreshBundles = useCallback(async () => {
+    if (state.status !== 'authed') return
+    const acc = state.account
     try {
       const summaries = await listBundles(RECIPE_ID)
+      const owned = summaries.filter(
+        (b) =>
+          b.owner_account_id === acc.account_id ||
+          (b.owner_account_id == null && b.created_by === acc.account_id),
+      )
+      owned.sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      )
       const detailed = await Promise.all(
-        summaries.map(async (b) => {
+        owned.map(async (b) => {
           const detail = await getBundle(b.id)
           const tasksUi: Task[] =
             detail?.tasks.map((t, i) => backendTaskToUi(t, i)) ?? []
@@ -197,7 +213,7 @@ export function MobileApp() {
       const err = e as { message?: string }
       console.warn('bundle list failed:', err.message)
     }
-  }, [])
+  }, [state])
 
   useEffect(() => {
     if (state.status !== 'authed') return
@@ -206,21 +222,25 @@ export function MobileApp() {
 
   // Light polling (every 6s) of the active bundle so completed-status
   // updates from the daemon are visible without per-task SSE wiring.
+  //
+  // CRITICAL: drafts are frontend-only (no backend record yet) — the
+  // user just double-clicked the canvas and is typing the title. If
+  // we replace tasks wholesale with detail.tasks, the draft disappears
+  // before they can hit Enter. Merge: keep every local draft, replace
+  // everything else with the backend snapshot.
   useEffect(() => {
     if (!activeBundleId) return
     const id = setInterval(async () => {
       try {
         const detail = await getBundle(activeBundleId)
         if (!detail) return
+        const realTasks = detail.tasks.map((t, i) => backendTaskToUi(t, i))
         setBundles((bs) =>
-          bs.map((b) =>
-            b.id !== activeBundleId
-              ? b
-              : {
-                  ...b,
-                  tasks: detail.tasks.map((t, i) => backendTaskToUi(t, i)),
-                },
-          ),
+          bs.map((b) => {
+            if (b.id !== activeBundleId) return b
+            const drafts = b.tasks.filter((t) => t.status === 'draft')
+            return { ...b, tasks: [...realTasks, ...drafts] }
+          }),
         )
       } catch {
         // transient errors — ignore; next tick will retry.
@@ -374,7 +394,18 @@ export function MobileApp() {
   // ── 6. Ship — real backend createTask ───────────────────────────
   // No mock lifecycle. The daemon will pick up the OPEN task and the
   // 6s polling refresh will surface the state transitions.
-  const shipReal = async (text: string): Promise<ApiTask | null> => {
+  //
+  // Resilience: legacy bundles in this recipe have owner_account_id
+  // set to the caller's username (not account_id) and 403 with "Not
+  // your bundle" on task create. If our active bundle is wedged like
+  // that — or has no paired runtime — we transparently create a fresh
+  // bundle (which auto-binds to the most-recent live runtime) and
+  // retry. Without this, the "double-click → ship → stays UNCLAIMED"
+  // trap reappears every time the user lands on a stale tab.
+  const shipReal = async (
+    text: string,
+    { allowRecover = true }: { allowRecover?: boolean } = {},
+  ): Promise<ApiTask | null> => {
     if (!activeBundleId) {
       setShipError('No bundle yet — refresh in a few seconds.')
       return null
@@ -386,7 +417,37 @@ export function MobileApp() {
       // via the recipe SSE stream — no frontend narration needed.
       return task
     } catch (e) {
-      const err = e as { code?: string; message?: string }
+      const err = e as { code?: string; message?: string; status?: number }
+      const recoverable =
+        allowRecover &&
+        (err.code === 'no_paired_agent' ||
+          err.status === 403 ||
+          err.status === 404 ||
+          err.message === 'Not your bundle' ||
+          err.message === 'Bundle not found')
+      if (recoverable) {
+        try {
+          const fresh = await createBundle(RECIPE_ID, text.slice(0, 64))
+          setBundles((bs) => [
+            { id: fresh.id, name: fresh.prompt ?? fresh.id, tasks: [] },
+            ...bs.filter((b) => b.id !== fresh.id),
+          ])
+          setActiveBundleId(fresh.id)
+          showToast(`Active bundle was wedged — created ${fresh.id.slice(0, 12)}…`, 2400)
+          // Retry once against the fresh bundle.
+          const { task } = await createTask(fresh.id, text)
+          setShipError(null)
+          return task
+        } catch (e2) {
+          const err2 = e2 as { code?: string; message?: string }
+          const detail2 =
+            err2.code === 'no_paired_agent'
+              ? 'Hire an agent first'
+              : (err2.message ?? 'Failed to ship after recover')
+          setShipError(detail2)
+          return null
+        }
+      }
       const detail =
         err.code === 'no_paired_agent'
           ? 'Hire an agent first'
