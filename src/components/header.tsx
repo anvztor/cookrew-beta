@@ -127,6 +127,11 @@ interface CrHeaderProps {
   onFeed?: () => void
   partyOpen?: boolean
   feedOpen?: boolean
+  /** Real account from /me — drives the avatar's name/sub. The
+   *  legacy "ALEX/OPERATOR" defaults remain only as the
+   *  pre-auth/loading fallback. */
+  username?: string | null
+  accountId?: string
 }
 
 export function CrHeader({
@@ -140,6 +145,8 @@ export function CrHeader({
   onFeed,
   partyOpen = false,
   feedOpen = false,
+  username,
+  accountId,
 }: CrHeaderProps) {
   const isMobile = variant === 'mobile'
   const devIns = detectDeviceInsets()
@@ -259,10 +266,10 @@ export function CrHeader({
       )}
 
       <CrProfileAvatar
-        name="ALEX"
-        sub="OPERATOR"
+        name={(username || accountId?.slice(0, 8) || 'GUEST').toUpperCase()}
+        sub={accountId ? accountId.slice(0, 14) : 'SIGNED IN'}
         portrait="human"
-        hp={92}
+        hp={100}
         max={100}
         status="on"
         size={isMobile ? 32 : 40}

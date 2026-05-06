@@ -499,6 +499,8 @@ export function MobileApp() {
         bundle={activeBundleId}
         online={onlineCount}
         total={roster.length}
+        username={state.account.username}
+        accountId={state.account.account_id}
         partyOpen={partyOpen}
         feedOpen={feedOpen}
         onMenu={() => {
