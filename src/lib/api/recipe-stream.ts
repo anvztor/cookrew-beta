@@ -152,6 +152,23 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
     const url = `${KREWHUB}/api/v1/recipes/${recipeId}/stream`
     const es = new EventSource(url, { withCredentials: true })
 
+    const appendSynthetic = (kind: string, msg: string) => {
+      seqRef.current += 1
+      const ev: RecipeEvent = {
+        id: `${kind}_${seqRef.current}_${Date.now()}`,
+        t: nowStamp(),
+        agent: 'SYSTEM',
+        kind,
+        msg,
+      }
+      setEvents((cur) => {
+        const last = cur[cur.length - 1]
+        if (last && last.kind === kind) return cur
+        const next = [...cur, ev]
+        return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next
+      })
+    }
+
     const append = (eventName: string, raw: string) => {
       if (eventName === 'ping') return
       let payload: Record<string, unknown> = {}
@@ -176,6 +193,8 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
       })
     }
 
+    es.onopen = () => appendSynthetic('sse.open', 'recipe stream connected')
+
     const listeners: Record<string, (e: MessageEvent) => void> = {}
     KNOWN_EVENT_TYPES.forEach((t) => {
       const fn = (e: MessageEvent) => append(t, e.data ?? '')
@@ -190,21 +209,7 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
     es.onerror = () => {
       // Connection drops will auto-reconnect via EventSource. Surface
       // the disconnect once so the operator knows the channel blinked.
-      seqRef.current += 1
-      setEvents((cur) => {
-        const last = cur[cur.length - 1]
-        if (last && last.kind === 'sse.error') return cur
-        return [
-          ...cur,
-          {
-            id: `sse_err_${seqRef.current}`,
-            t: nowStamp(),
-            agent: 'SYSTEM',
-            kind: 'sse.error',
-            msg: 'channel reconnecting…',
-          },
-        ]
-      })
+      appendSynthetic('sse.error', 'channel reconnecting…')
     }
 
     return () => {
