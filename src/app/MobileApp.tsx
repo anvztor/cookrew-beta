@@ -828,7 +828,6 @@ export function MobileApp() {
         <HireAgentRuntimeModal
           open={hireOpen}
           onClose={() => setHireOpen(false)}
-          bundleId={DEV_BUNDLE_ID}
           accountId={accountId}
           onPaired={handlePaired}
           variant="mobile"

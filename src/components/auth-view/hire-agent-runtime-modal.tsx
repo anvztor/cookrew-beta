@@ -25,7 +25,6 @@ import type { Variant } from '../party-sidebar'
 interface Props {
   open: boolean
   onClose: () => void
-  bundleId: string
   accountId: string
   /** Called with the freshly-fetched roster of runtimes after a pair succeeds. */
   onPaired: (runtimes: Runtime[]) => void
@@ -42,7 +41,6 @@ interface LogLine {
 export function HireAgentRuntimeModal({
   open,
   onClose,
-  bundleId,
   accountId,
   onPaired,
   variant = 'desktop',
@@ -60,11 +58,10 @@ export function HireAgentRuntimeModal({
     setLog([
       { text: '▸ KREW-PAIR · awaiting daemon code from `krewcli login`', tone: 'hi' },
       { text: `  account: ${accountId.slice(0, 14)}…`, tone: 'dim' },
-      { text: `  bundle:  ${bundleId}`, tone: 'dim' },
     ])
     setError(null)
     setTimeout(() => inputRef.current?.focus(), 80)
-  }, [open, accountId, bundleId])
+  }, [open, accountId])
 
   const append = (line: LogLine) => setLog((l) => [...l, line])
 
@@ -73,10 +70,10 @@ export function HireAgentRuntimeModal({
     if (!userCode) return
     setPhase('pairing')
     setError(null)
-    append({ text: `▸ POST /bundles/${bundleId}/pair-agent  (code=${userCode})`, tone: 'dim' })
+    append({ text: `▸ POST /agents/pair  (code=${userCode})`, tone: 'dim' })
 
     try {
-      const result = await pairAgent(bundleId, userCode)
+      const result = await pairAgent(userCode)
       append({ text: `[+] PAIRED · ${result.runtime_id}`, tone: 'hi' })
       append({ text: '▸ GET /agents/runtimes …', tone: 'dim' })
 

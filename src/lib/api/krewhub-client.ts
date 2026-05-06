@@ -114,14 +114,21 @@ export interface Runtime {
 export interface PairAgentResult {
   detail: string
   runtime_id: string
-  bundle_id: string
+  bundle_id?: string
 }
 
-export async function pairAgent(
-  bundleId: string,
-  userCode: string,
-): Promise<PairAgentResult> {
-  const r = await fetch(`${KREWHUB}/bundles/${bundleId}/pair-agent`, {
+/**
+ * Pair an agent runtime to the caller's account.
+ *
+ * Calls krewhub `POST /agents/pair` (account-scoped). The older
+ * `/bundles/{id}/pair-agent` route required an existing bundle owned
+ * by the caller — we don't have one when the user is pairing their
+ * first agent, so cookrew-beta uses the bundle-less variant. Krewhub
+ * still relays the device-code approval to krewauth and creates an
+ * `agent_runtimes` row owned by the caller.
+ */
+export async function pairAgent(userCode: string): Promise<PairAgentResult> {
+  const r = await fetch(`${KREWHUB}/agents/pair`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -144,7 +151,9 @@ export async function pairAgent(
 }
 
 export async function listRuntimes(accountId: string): Promise<Runtime[]> {
-  const url = new URL(`${KREWHUB}/agents/runtimes`)
+  // The runtime list router is mounted under /api/v1; the bare
+  // /agents/runtimes path 404s.
+  const url = new URL(`${KREWHUB}/api/v1/agents/runtimes`)
   url.searchParams.set('account_id', accountId)
   const r = await fetch(url.toString(), { credentials: 'include' })
   if (!r.ok) throw makeError(`runtimes_${r.status}`, undefined, r.status)
