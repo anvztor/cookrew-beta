@@ -15,8 +15,12 @@ export interface RecipeEvent {
   id: string
   /** HH:MM:SS for display. */
   t: string
-  /** Source label (BUNDLE / TASK / AGENT / SYS / runtime-id). */
-  src: string
+  /** Agent or "SYSTEM". Drives the event-feed tabs.
+   *  Examples: "echo@krew", "scout@bob", "SYSTEM". */
+  agent: string
+  /** Task this event is about, if any. Lets the feed filter to a
+   *  single quest when the user clicks a task on the board. */
+  taskId?: string
   /** Lowercase event kind name from the server, e.g. 'task.updated'. */
   kind: string
   /** Human-readable single-line summary. */
@@ -42,23 +46,27 @@ function shortId(v: unknown): string {
   return s.length > 14 ? s.slice(0, 14) + '…' : s
 }
 
-function summarise(eventName: string, payload: Record<string, unknown>): {
-  src: string
+interface EventSlots {
+  agent: string
+  taskId?: string
   msg: string
-} {
+}
+
+function summarise(eventName: string, payload: Record<string, unknown>): EventSlots {
   // event.added rows carry the rich per-task agent activity: thinking,
   // tool_use, tool_result, agent_reply, session_*, milestone, etc. The
   // server provides `body` (human-readable) + `type` (kind) + `actor_id`
-  // so we can render exactly what the agent did.
+  // so we can attribute the line to the correct agent tab.
   if (eventName === 'event.added' || eventName === 'event.modified') {
     const type = asString(payload.type) || 'event'
-    const actor = asString(payload.actor_id) || 'SYS'
+    const actor = asString(payload.actor_id) || 'SYSTEM'
     const body = asString(payload.body)
-    const taskId = shortId(payload.task_id)
+    const taskId = asString(payload.task_id) || undefined
     const head = body || type
     return {
-      src: actor.toUpperCase().split('@')[0] || 'AGENT',
-      msg: `${taskId} ${type} · ${head.slice(0, 120)}`,
+      agent: actor,
+      taskId,
+      msg: `${type} · ${head.slice(0, 140)}`,
     }
   }
 
@@ -67,35 +75,42 @@ function summarise(eventName: string, payload: Record<string, unknown>): {
     case 'bundle': {
       const id = shortId(payload.id ?? payload.bundle_id)
       const status = asString(payload.status) || eventName.split('.')[1]
-      return { src: 'BUNDLE', msg: `${id} → ${status}` }
+      return { agent: 'SYSTEM', msg: `bundle ${id} → ${status}` }
     }
     case 'task': {
-      const id = shortId(payload.id ?? payload.task_id)
+      const taskId = asString(payload.id ?? payload.task_id) || undefined
+      const id = shortId(taskId)
       const status = asString(payload.status) || 'updated'
-      const claimedBy = asString(payload.claimed_by_agent_id) || asString(payload.assigned_agent_id)
-      const tail = claimedBy ? ` · ${claimedBy}` : ''
-      return { src: 'TASK', msg: `${id} → ${status}${tail}` }
+      // Attribute to whichever agent has the task right now so the
+      // status flips show up under that agent's tab too.
+      const agent =
+        asString(payload.claimed_by_agent_id) ||
+        asString(payload.assigned_agent_id) ||
+        'SYSTEM'
+      return { agent, taskId, msg: `task ${id} → ${status}` }
     }
     case 'agent': {
-      const id = asString(payload.agent_id) || shortId(payload.id)
+      const agent = asString(payload.agent_id) || shortId(payload.id)
       const status = asString(payload.status) || 'presence'
-      const task = asString(payload.current_task_id)
-      const tail = task ? ` · on ${shortId(task)}` : ''
-      return { src: 'AGENT', msg: `${id} ${status}${tail}` }
+      const taskId = asString(payload.current_task_id) || undefined
+      const tail = taskId ? ` · on ${shortId(taskId)}` : ''
+      return { agent, taskId, msg: `${status}${tail}` }
     }
     case 'digest': {
       const id = shortId(payload.id)
-      return { src: 'DIGEST', msg: `${id} ${eventName.split('.')[1] ?? ''}` }
+      return { agent: 'SYSTEM', msg: `digest ${id} ${eventName.split('.')[1] ?? ''}` }
     }
     case 'sandbox': {
       const id = shortId(payload.id ?? payload.sandbox_id)
       const status = asString(payload.status) || eventName.split('.')[1]
-      return { src: 'SANDBOX', msg: `${id} → ${status}` }
+      const taskId = asString(payload.task_id) || undefined
+      return { agent: 'SYSTEM', taskId, msg: `sandbox ${id} → ${status}` }
     }
     default: {
-      // Fallback: stringified-payload preview.
+      // Fallback: stringified-payload preview attributed to SYSTEM so
+      // it doesn't pollute an agent tab.
       const s = JSON.stringify(payload)
-      return { src: scope.toUpperCase() || 'SYS', msg: s.length > 140 ? s.slice(0, 140) + '…' : s }
+      return { agent: 'SYSTEM', msg: s.length > 140 ? s.slice(0, 140) + '…' : s }
     }
   }
 }
@@ -145,14 +160,15 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
       } catch {
         // ignore — keep payload empty so the summariser shows the kind
       }
-      const { src, msg } = summarise(eventName, payload)
+      const slots = summarise(eventName, payload)
       seqRef.current += 1
       const ev: RecipeEvent = {
         id: `sse_${seqRef.current}_${Date.now()}`,
         t: nowStamp(),
-        src,
+        agent: slots.agent,
+        taskId: slots.taskId,
         kind: eventName,
-        msg,
+        msg: slots.msg,
       }
       setEvents((cur) => {
         const next = [...cur, ev]
@@ -183,7 +199,7 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
           {
             id: `sse_err_${seqRef.current}`,
             t: nowStamp(),
-            src: 'SSE',
+            agent: 'SYSTEM',
             kind: 'sse.error',
             msg: 'channel reconnecting…',
           },

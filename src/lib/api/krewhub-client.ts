@@ -16,6 +16,11 @@ export interface Task {
   status: string
   assigned_runtime_id: string | null
   sandbox_id: string | null
+  /** Logical agent identity, e.g. "echo@krew". Drives event-feed
+   *  agent tabs + per-task focus. */
+  assigned_agent_id?: string | null
+  /** Set once an agent actually claims the task. */
+  claimed_by_agent_id?: string | null
 }
 
 export interface Sandbox {

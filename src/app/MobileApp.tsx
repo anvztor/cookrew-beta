@@ -64,16 +64,25 @@ function mapStatus(backendStatus: string): TaskStatus {
 
 function backendTaskToUi(t: ApiTask, idx: number): Task {
   const blocked = (t.status ?? '').toLowerCase() === 'blocked'
+  // Logical agent identity — what the SSE stream's `actor_id` will
+  // match. The runtime id is a UUID and can't be correlated with
+  // event.added rows, so we surface the agent_id when available.
+  const agentId =
+    t.claimed_by_agent_id ?? t.assigned_agent_id ?? undefined
+  const displayAssignee =
+    agentId ??
+    (t.assigned_runtime_id ? t.assigned_runtime_id.slice(0, 8) : '—')
   return {
     id: t.id,
     no: String(idx + 1).padStart(2, '0'),
     title: t.title || '(untitled)',
     status: mapStatus(t.status ?? 'queued'),
-    assignee: t.assigned_runtime_id ?? '—',
-    role: t.assigned_runtime_id ? 'AGENT' : '—',
+    assignee: displayAssignee,
+    role: agentId ? 'AGENT' : '—',
     adds: 0,
     dels: 0,
     blocked,
+    agentId: agentId ?? undefined,
     // Initial grid placement; CrTaskCanvas FORMAT button can re-layout.
     x: 24 + (idx % 4) * 240,
     y: 24 + Math.floor(idx / 4) * 156,
@@ -130,8 +139,12 @@ export function MobileApp() {
   const [formatTick] = useState(0)
   const [hitlOpen, setHitlOpen] = useState<HitlItem | null>(null)
   const [shipError, setShipError] = useState<string | null>(null)
-  // (No activeTaskId — the EventFeed subscribes to the whole recipe
-  // stream so cross-task events are captured without per-task wiring.)
+  // When the user clicks an assigned task on the board we pop the
+  // EventFeed open and pre-select that agent's tab + task focus.
+  const [focusedTask, setFocusedTask] = useState<{
+    taskId: string
+    agentId?: string
+  } | null>(null)
 
   const showToast = (msg: string, ms = 1800) => {
     setToast(msg)
@@ -425,7 +438,15 @@ export function MobileApp() {
       setDraftId(t.id)
       setPrompt(t.title || '')
       setMode('assign')
+      return
     }
+    // Any non-draft, non-hitl task: pop the event feed open and focus
+    // it on this task's agent. Even if the agent hasn't claimed yet
+    // (agentId undefined), opening the feed against the taskId is the
+    // useful default.
+    setFocusedTask({ taskId: t.id, agentId: t.agentId })
+    setPartyOpen(false)
+    setFeedOpen(true)
   }
 
   const onChangeDraftTitle = (v: string) => {
@@ -465,6 +486,7 @@ export function MobileApp() {
   const closeDrawers = () => {
     setPartyOpen(false)
     setFeedOpen(false)
+    setFocusedTask(null)
   }
   const cls = `cr cr-app${partyOpen ? ' party-open' : ''}${feedOpen ? ' feed-open' : ''}`
   const liveHitl = deriveHitl(tasks)
@@ -554,7 +576,14 @@ export function MobileApp() {
         <CrEventFeed
           variant="mobile"
           recipeId={RECIPE_ID}
-          onClose={() => setFeedOpen(false)}
+          focusTaskId={focusedTask?.taskId}
+          focusAgentId={focusedTask?.agentId}
+          onClose={() => {
+            setFeedOpen(false)
+            // Clear focus when the user dismisses the panel so the next
+            // open shows the unfiltered feed unless they click another task.
+            setFocusedTask(null)
+          }}
         />
       </div>
 

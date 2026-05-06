@@ -40,6 +40,11 @@ export interface Task {
   y: number
   deps?: string[]
 
+  /** Logical agent identity (e.g. "echo@krew") so the event feed
+   *  can pre-select the right tab on task click. Distinct from
+   *  `assignee` which is a display string. */
+  agentId?: string
+
   // Draft / open lifecycle timestamps
   openedAt?: number
   workingAt?: number
