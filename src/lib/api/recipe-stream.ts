@@ -46,6 +46,22 @@ function summarise(eventName: string, payload: Record<string, unknown>): {
   src: string
   msg: string
 } {
+  // event.added rows carry the rich per-task agent activity: thinking,
+  // tool_use, tool_result, agent_reply, session_*, milestone, etc. The
+  // server provides `body` (human-readable) + `type` (kind) + `actor_id`
+  // so we can render exactly what the agent did.
+  if (eventName === 'event.added' || eventName === 'event.modified') {
+    const type = asString(payload.type) || 'event'
+    const actor = asString(payload.actor_id) || 'SYS'
+    const body = asString(payload.body)
+    const taskId = shortId(payload.task_id)
+    const head = body || type
+    return {
+      src: actor.toUpperCase().split('@')[0] || 'AGENT',
+      msg: `${taskId} ${type} · ${head.slice(0, 120)}`,
+    }
+  }
+
   const [scope] = eventName.split('.')
   switch (scope) {
     case 'bundle': {
@@ -56,14 +72,16 @@ function summarise(eventName: string, payload: Record<string, unknown>): {
     case 'task': {
       const id = shortId(payload.id ?? payload.task_id)
       const status = asString(payload.status) || 'updated'
-      const runtime = asString(payload.assigned_runtime_id)
-      const tail = runtime ? ` · ${runtime.slice(0, 8)}…` : ''
+      const claimedBy = asString(payload.claimed_by_agent_id) || asString(payload.assigned_agent_id)
+      const tail = claimedBy ? ` · ${claimedBy}` : ''
       return { src: 'TASK', msg: `${id} → ${status}${tail}` }
     }
     case 'agent': {
       const id = asString(payload.agent_id) || shortId(payload.id)
       const status = asString(payload.status) || 'presence'
-      return { src: 'AGENT', msg: `${id} ${status}` }
+      const task = asString(payload.current_task_id)
+      const tail = task ? ` · on ${shortId(task)}` : ''
+      return { src: 'AGENT', msg: `${id} ${status}${tail}` }
     }
     case 'digest': {
       const id = shortId(payload.id)
@@ -102,6 +120,11 @@ const KNOWN_EVENT_TYPES = [
   'digest.modified',
   'sandbox.attached',
   'sandbox.released',
+  // Per-task agent activity: thinking / tool_use / tool_result / agent_reply
+  // / session_start / session_end / milestone — all delivered as
+  // event.added rows by the watch service.
+  'event.added',
+  'event.modified',
   'ping',
 ]
 
