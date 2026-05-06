@@ -1,67 +1,34 @@
-// CrEventFeed — phosphor "Pip-Boy" log of every system + agent action.
-// Subscribes to the in-process event bus (emitEvent/useEvents) and to
-// the krewhub SSE stream when a live taskId is provided.
+// CrEventFeed — phosphor-CRT log of REAL backend events.
+//
+// Subscribes to `GET /api/v1/recipes/{recipe_id}/stream` (SSE). Every line
+// you see in the feed corresponds to a watch-service event from krewhub —
+// no frontend narration, no in-process bus, no design-time mocks.
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { useEvents, emitEvent, type FeedEvent } from '../lib/event-bus'
-import { streamTask } from '../lib/api/krewhub-client'
+import { useRecipeStream, type RecipeEvent } from '../lib/api/recipe-stream'
 import type { Variant } from './party-sidebar'
 
 interface CrEventFeedProps {
   variant?: Variant
   onClose?: () => void
-  taskId?: string
+  /** Recipe whose live event stream feeds this panel. */
+  recipeId?: string
 }
 
-export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFeedProps) {
-  const allEvents = useEvents()
+export function CrEventFeed({ variant = 'desktop', onClose, recipeId }: CrEventFeedProps) {
+  const allEvents = useRecipeStream(recipeId)
   const [filter, setFilter] = useState<string>('ALL')
   const isMobile = variant === 'mobile'
 
-  // When a live SSE task id is supplied, fan-in real backend events to the bus.
-  useEffect(() => {
-    if (!taskId) return
-    const es = streamTask(taskId)
-    const onMessage = (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data) as {
-          kind?: string
-          payload?: Record<string, unknown>
-        }
-        const kind = data.kind ?? 'event'
-        const payloadStr =
-          data.payload && typeof data.payload === 'object'
-            ? JSON.stringify(data.payload).slice(0, 120)
-            : ''
-        emitEvent({
-          src: 'TASK',
-          kind:
-            kind === 'task.completed'
-              ? 'done'
-              : kind === 'sandbox.attached'
-                ? 'milestone'
-                : 'info',
-          msg: `${kind} ${payloadStr}`.trim(),
-        })
-      } catch {
-        // ignore malformed event lines
-      }
-    }
-    es.addEventListener('message', onMessage)
-    return () => {
-      es.removeEventListener('message', onMessage)
-      es.close()
-    }
-  }, [taskId])
-
-  const events = useMemo<readonly FeedEvent[]>(
+  const events = useMemo<readonly RecipeEvent[]>(
     () => (filter === 'ALL' ? allEvents : allEvents.filter((e) => e.src === filter)),
     [allEvents, filter],
   )
 
-  // Always keep ALL + the canonical sources visible so filter chips don't pop in.
+  // Filter chips — derived from the live event sources, with the
+  // canonical scopes always present so the row doesn't pop in.
   const sources = useMemo(() => {
-    const base = ['ALL', 'SYS', 'SCOUT', 'GATEKEEPER', 'BREWER', 'PATCHER']
+    const base = ['ALL', 'BUNDLE', 'TASK', 'AGENT', 'SANDBOX', 'DIGEST']
     const seen = new Set(base)
     allEvents.forEach((e) => {
       if (!seen.has(e.src)) {
@@ -72,7 +39,6 @@ export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFee
     return base
   }, [allEvents])
 
-  // Auto-scroll to newest line on every new event.
   const scrollRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const el = scrollRef.current
@@ -132,7 +98,7 @@ export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFee
             color: 'var(--phos-dim)',
           }}
         >
-          {events.length} TRACED
+          {events.length} TRACED · recipe {recipeId ? recipeId.slice(0, 14) : '—'}
         </span>
         {onClose && (
           <button onClick={onClose} style={btnStyle}>
@@ -184,8 +150,8 @@ export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFee
               fontSize: 12,
             }}
           >
-            <div>// awaiting events …</div>
             <div>// SSE channel · open · idle</div>
+            <div>// awaiting backend events for {recipeId ?? 'this recipe'}</div>
             <div>// hire an agent or ship a quest</div>
           </div>
         )}
@@ -212,18 +178,25 @@ export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFee
               [{e.src}]
             </span>
             <span
+              className="cr-phos-dim"
+              style={{
+                fontFamily: 'JetBrains Mono, monospace',
+                fontSize: 10,
+                flexShrink: 0,
+                paddingTop: 2,
+              }}
+            >
+              {e.kind}
+            </span>
+            <span
               style={{
                 flex: 1,
                 color:
-                  e.kind === 'block' || e.kind === 'warn'
+                  e.kind === 'sse.error'
                     ? 'var(--rose)'
-                    : e.kind === 'done' || e.kind === 'milestone'
+                    : e.kind.endsWith('.completed') || e.kind.endsWith('.cooked')
                       ? 'var(--phos-glow)'
-                      : e.kind === 'think'
-                        ? 'var(--phos-dim)'
-                        : e.kind === 'tool' || e.kind === 'code'
-                          ? 'var(--phos-glow)'
-                          : 'var(--phos)',
+                      : 'var(--phos)',
               }}
             >
               {e.msg}

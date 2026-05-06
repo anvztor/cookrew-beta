@@ -18,7 +18,10 @@ import {
   type Runtime,
   type Task as ApiTask,
 } from '../lib/api/krewhub-client'
-import { emitEvent } from '../lib/event-bus'
+// Note: the in-process event-bus is intentionally NOT imported here.
+// All on-screen events come from the krewhub recipe SSE stream
+// (see CrEventFeed → useRecipeStream). Anything we'd emit here would
+// be frontend narration, which is exactly what we removed.
 import {
   runtimeToRoster,
   type RosterMember,
@@ -127,7 +130,8 @@ export function MobileApp() {
   const [formatTick] = useState(0)
   const [hitlOpen, setHitlOpen] = useState<HitlItem | null>(null)
   const [shipError, setShipError] = useState<string | null>(null)
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  // (No activeTaskId — the EventFeed subscribes to the whole recipe
+  // stream so cross-task events are captured without per-task wiring.)
 
   const showToast = (msg: string, ms = 1800) => {
     setToast(msg)
@@ -144,11 +148,7 @@ export function MobileApp() {
       setRoster([humanRosterFromAccount(acc), ...agents])
     } catch (e) {
       const err = e as { message?: string }
-      emitEvent({
-        src: 'SYS',
-        kind: 'warn',
-        msg: `!! roster fetch failed: ${err.message ?? 'unknown'}`,
-      })
+      console.warn('roster fetch failed:', err.message)
       setRoster([humanRosterFromAccount(acc)])
     }
   }, [])
@@ -180,18 +180,9 @@ export function MobileApp() {
         if (cur && detailed.some((b) => b.id === cur)) return cur
         return detailed[0]?.id ?? ''
       })
-      emitEvent({
-        src: 'SYS',
-        kind: 'bundle',
-        msg: `>> ${detailed.length} bundle(s) loaded for recipe ${RECIPE_ID}`,
-      })
     } catch (e) {
       const err = e as { message?: string }
-      emitEvent({
-        src: 'SYS',
-        kind: 'warn',
-        msg: `!! bundle list failed: ${err.message ?? 'unknown'}`,
-      })
+      console.warn('bundle list failed:', err.message)
     }
   }, [])
 
@@ -231,14 +222,6 @@ export function MobileApp() {
       const human = humanRosterFromAccount(state.account)
       setRoster([human, ...runtimes.map(runtimeToRoster)])
     }
-    runtimes.forEach((rt) => {
-      const r = runtimeToRoster(rt)
-      emitEvent({
-        src: 'SYS',
-        kind: 'bundle',
-        msg: `>> AGENT ${r.name} ONLINE · ${r.sub} · ${rt.id}`,
-      })
-    })
     showToast(`Paired · ${runtimes.length} agent${runtimes.length === 1 ? '' : 's'} online`, 2400)
   }
 
@@ -251,11 +234,7 @@ export function MobileApp() {
       setActiveBundleId(b.id)
       setDraftId(null)
       setPrompt('')
-      emitEvent({
-        src: 'SYS',
-        kind: 'bundle',
-        msg: `>> BUNDLE ${b.id} CREATED · "${b.prompt ?? ''}"`,
-      })
+      // Real bundle.created event will appear in the feed via SSE.
     } catch (e) {
       const err = e as { message?: string }
       showToast(`Bundle create failed: ${err.message}`, 2600)
@@ -301,7 +280,6 @@ export function MobileApp() {
     setDraftId(id)
     setPrompt('')
     setMode('assign')
-    emitEvent({ src: 'ALEX', kind: 'prompt', msg: `▸ DRAFT #${no} created · awaiting spec` })
   }
   const cancelDraft = useCallback(() => {
     if (!draftId) return
@@ -391,12 +369,8 @@ export function MobileApp() {
     try {
       const { task } = await createTask(activeBundleId, text)
       setShipError(null)
-      setActiveTaskId(task.id)
-      emitEvent({
-        src: 'SYS',
-        kind: 'bundle',
-        msg: `>> TASK #${task.id.slice(-6)} CREATED · "${text.slice(0, 50)}"`,
-      })
+      // The real task.added / task.updated event will land in the feed
+      // via the recipe SSE stream — no frontend narration needed.
       return task
     } catch (e) {
       const err = e as { code?: string; message?: string }
@@ -405,7 +379,6 @@ export function MobileApp() {
           ? 'Hire an agent first'
           : (err.message ?? 'Failed to ship')
       setShipError(detail)
-      emitEvent({ src: 'SYS', kind: 'warn', msg: `!! ship failed: ${detail}` })
       return null
     }
   }
@@ -580,7 +553,7 @@ export function MobileApp() {
       <div className="cr-drawer right">
         <CrEventFeed
           variant="mobile"
-          taskId={activeTaskId ?? undefined}
+          recipeId={RECIPE_ID}
           onClose={() => setFeedOpen(false)}
         />
       </div>
