@@ -58,7 +58,7 @@ export function CrChip({ tone = '', children, style }: CrChipProps) {
   )
 }
 
-type LedState = 'on' | 'off' | 'busy' | 'red'
+type LedState = 'on' | 'off' | 'busy' | 'red' | 'blue'
 
 export function CrLED({ state = 'on', style }: { state?: LedState; style?: CSSProperties }) {
   return <span className={`cr-led ${state}`} style={style} />

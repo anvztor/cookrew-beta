@@ -7,7 +7,7 @@ import type { RosterStatus } from '../data/roster'
 
 interface CrLogoProps {
   size?: 'sm' | 'md' | 'lg'
-  tag?: string
+  tag?: string | null
   tagTone?: 'phos' | 'amber' | 'slate'
 }
 
@@ -180,30 +180,32 @@ export function CrHeader({
 
   return (
     <header className="cr" style={headerStyle}>
-      <CrLogo size={isMobile ? 'sm' : 'md'} tag="BETA" tagTone="phos" />
+      <CrLogo size={isMobile ? 'sm' : 'md'} tag={isMobile ? null : 'BETA'} tagTone="phos" />
 
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          minWidth: 0,
-          gap: 2,
-          marginLeft: 4,
-        }}
-      >
-        <span
-          className="cr-mono"
+      {!isMobile && bundle && (
+        <div
           style={{
-            fontSize: isMobile ? 10 : 11,
-            color: 'var(--muted)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+            gap: 2,
+            marginLeft: 4,
           }}
         >
-          {bundle}
-        </span>
-      </div>
+          <span
+            className="cr-mono"
+            style={{
+              fontSize: 11,
+              color: 'var(--muted)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {bundle}
+          </span>
+        </div>
+      )}
 
       <span style={{ flex: 1 }} />
 

@@ -1,6 +1,7 @@
 import { CrBar, CrButton, CrChip, CrLED, CrTokBar } from './atoms/atoms'
 import { CR_PORTRAITS, CrSprite } from './atoms/sprite'
-import { CR_ROSTER } from '../data/roster'
+import type { RosterMember } from '../data/roster'
+import type { Task } from '../data/tasks'
 
 export type Variant = 'desktop' | 'mobile'
 
@@ -9,15 +10,32 @@ interface CrPartySidebarProps {
   active?: string
   onSelect?: (id: string) => void
   variant?: Variant
+  roster: RosterMember[]
+  onHire?: () => void
+  tasks?: Task[]
 }
 
 export function CrPartySidebar({
   collapsed = false,
   active = 'scout',
   onSelect,
+  roster,
+  onHire,
+  tasks = [],
 }: CrPartySidebarProps) {
-  const online = CR_ROSTER.filter((r) => r.status !== 'off').length
+  // Build a map: agent name → active task title (working only).
+  const taskByAgent: Record<string, Task> = {}
+  tasks.forEach((t) => {
+    if (t.status === 'working' && t.assignee && t.assignee !== '—') {
+      taskByAgent[t.assignee] = t
+    }
+  })
+
+  const online = roster.filter((r) => r.status !== 'off').length
   const w = collapsed ? 64 : 240
+
+  const hasAgents = roster.some((r) => r.kind === 'agent')
+
   return (
     <aside
       className="cr"
@@ -45,15 +63,54 @@ export function CrPartySidebar({
           </div>
         ) : (
           <div className="cr-kicker" style={{ fontSize: 8 }}>
-            PARTY · {online}/{CR_ROSTER.length} ONLINE
+            PARTY · {online}/{roster.length} ONLINE
           </div>
         )}
       </div>
+
       <div
         className="cr-scroll"
         style={{ flex: 1, overflowY: 'auto', padding: collapsed ? '8px 6px' : '10px 10px' }}
       >
-        {CR_ROSTER.map((m) => (
+        {!hasAgents && !collapsed && (
+          <div
+            style={{
+              padding: '24px 12px',
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+              alignItems: 'center',
+            }}
+          >
+            <div
+              style={{
+                width: 56,
+                height: 56,
+                border: '2px dashed var(--line-soft)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontFamily: 'Silkscreen,monospace',
+                fontSize: 22,
+                color: 'var(--muted)',
+              }}
+            >
+              ?
+            </div>
+            <div className="cr-display" style={{ fontSize: 10, color: 'var(--ink-soft)' }}>
+              NO AGENTS
+            </div>
+            <div
+              className="cr-mono"
+              style={{ fontSize: 10, color: 'var(--muted)', lineHeight: 1.4 }}
+            >
+              Hire one to start delegating quests.
+            </div>
+          </div>
+        )}
+
+        {roster.map((m) => (
           <button
             key={m.id}
             onClick={() => onSelect?.(m.id)}
@@ -114,6 +171,40 @@ export function CrPartySidebar({
                 >
                   {m.sub}
                 </div>
+
+                {m.status === 'busy' && taskByAgent[m.name] && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      marginBottom: 6,
+                      fontSize: 9,
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    <span className="cr-led busy" style={{ flexShrink: 0 }} />
+                    <span
+                      className="cr-mono"
+                      style={{ color: 'var(--amber-deep)', fontWeight: 700, flexShrink: 0 }}
+                    >
+                      #{taskByAgent[m.name].no}
+                    </span>
+                    <span
+                      className="cr-mono"
+                      style={{
+                        color: 'var(--muted)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        minWidth: 0,
+                      }}
+                    >
+                      {taskByAgent[m.name].title || '(untitled)'}
+                    </span>
+                  </div>
+                )}
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                   <CrBar label="HP" value={m.hp} max={m.max} kind="hp" />
                   {m.kind === 'agent' && (
@@ -125,6 +216,7 @@ export function CrPartySidebar({
           </button>
         ))}
       </div>
+
       {!collapsed && (
         <div
           style={{
@@ -136,8 +228,12 @@ export function CrPartySidebar({
             gap: 6,
           }}
         >
-          <CrButton variant="primary" size="sm" block>＋ HIRE AGENT</CrButton>
-          <CrButton variant="ghost" size="sm" block>⚙ CONFIG</CrButton>
+          <CrButton variant="primary" size="sm" block onClick={onHire}>
+            ＋ HIRE AGENT
+          </CrButton>
+          <CrButton variant="ghost" size="sm" block>
+            ⚙ CONFIG
+          </CrButton>
         </div>
       )}
     </aside>

@@ -1,28 +1,24 @@
-import { useEffect, useMemo, useState } from 'react'
-import { CR_EVENTS } from '../data/roster'
-import type { Variant } from './party-sidebar'
+// CrEventFeed — phosphor "Pip-Boy" log of every system + agent action.
+// Subscribes to the in-process event bus (emitEvent/useEvents) and to
+// the krewhub SSE stream when a live taskId is provided.
+
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEvents, emitEvent, type FeedEvent } from '../lib/event-bus'
 import { streamTask } from '../lib/api/krewhub-client'
+import type { Variant } from './party-sidebar'
 
 interface CrEventFeedProps {
   variant?: Variant
   onClose?: () => void
-  // Auth track A2: when set, the feed subscribes to /tasks/{id}/stream
-  // and prepends live events to the legacy mock CR_EVENTS list.
   taskId?: string
 }
 
-interface LiveEvent {
-  t: string
-  src: string
-  msg: string
-  kind?: 'block' | 'done' | 'info'
-}
-
 export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFeedProps) {
+  const allEvents = useEvents()
   const [filter, setFilter] = useState<string>('ALL')
-  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([])
   const isMobile = variant === 'mobile'
 
+  // When a live SSE task id is supplied, fan-in real backend events to the bus.
   useEffect(() => {
     if (!taskId) return
     const es = streamTask(taskId)
@@ -32,23 +28,23 @@ export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFee
           kind?: string
           payload?: Record<string, unknown>
         }
-        const ts = new Date().toLocaleTimeString().slice(0, 8)
         const kind = data.kind ?? 'event'
-        const summary =
-          (data.payload && typeof data.payload === 'object'
+        const payloadStr =
+          data.payload && typeof data.payload === 'object'
             ? JSON.stringify(data.payload).slice(0, 120)
-            : '') || ''
-        setLiveEvents((cur) => [
-          ...cur,
-          {
-            t: ts,
-            src: 'TASK',
-            msg: `${kind} ${summary}`.trim(),
-            kind: kind === 'task.completed' ? 'done' : 'info',
-          },
-        ])
+            : ''
+        emitEvent({
+          src: 'TASK',
+          kind:
+            kind === 'task.completed'
+              ? 'done'
+              : kind === 'sandbox.attached'
+                ? 'milestone'
+                : 'info',
+          msg: `${kind} ${payloadStr}`.trim(),
+        })
       } catch {
-        // ignore malformed events
+        // ignore malformed event lines
       }
     }
     es.addEventListener('message', onMessage)
@@ -58,21 +54,32 @@ export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFee
     }
   }, [taskId])
 
-  const allEvents: LiveEvent[] = useMemo(
-    () =>
-      [...liveEvents, ...CR_EVENTS] as LiveEvent[],
-    [liveEvents],
-  )
-  const events = useMemo(
+  const events = useMemo<readonly FeedEvent[]>(
     () => (filter === 'ALL' ? allEvents : allEvents.filter((e) => e.src === filter)),
     [allEvents, filter],
   )
-  const sources = useMemo(
-    () => ['ALL', ...new Set(allEvents.map((e) => e.src))],
-    [allEvents],
-  )
 
-  const btnStyle: React.CSSProperties = {
+  // Always keep ALL + the canonical sources visible so filter chips don't pop in.
+  const sources = useMemo(() => {
+    const base = ['ALL', 'SYS', 'SCOUT', 'GATEKEEPER', 'BREWER', 'PATCHER']
+    const seen = new Set(base)
+    allEvents.forEach((e) => {
+      if (!seen.has(e.src)) {
+        base.push(e.src)
+        seen.add(e.src)
+      }
+    })
+    return base
+  }, [allEvents])
+
+  // Auto-scroll to newest line on every new event.
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [allEvents.length])
+
+  const btnStyle: CSSProperties = {
     background: 'transparent',
     border: '1.5px solid var(--phos-dim)',
     color: 'var(--phos)',
@@ -161,12 +168,30 @@ export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFee
         ))}
       </div>
       <div
+        ref={scrollRef}
         className="cr-scroll"
         style={{ flex: 1, overflowY: 'auto', padding: '6px 10px', fontSize: 14, lineHeight: 1.4 }}
       >
-        {events.map((e, i) => (
+        {events.length === 0 && (
           <div
-            key={i}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              padding: '8px 0',
+              color: 'var(--phos-dim)',
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 12,
+            }}
+          >
+            <div>// awaiting events …</div>
+            <div>// SSE channel · open · idle</div>
+            <div>// hire an agent or ship a quest</div>
+          </div>
+        )}
+        {events.map((e) => (
+          <div
+            key={e.id}
             style={{ display: 'flex', gap: 6, padding: '2px 0', alignItems: 'flex-start' }}
           >
             <span
@@ -190,11 +215,15 @@ export function CrEventFeed({ variant = 'desktop', onClose, taskId }: CrEventFee
               style={{
                 flex: 1,
                 color:
-                  e.kind === 'block'
+                  e.kind === 'block' || e.kind === 'warn'
                     ? 'var(--rose)'
-                    : e.kind === 'done'
+                    : e.kind === 'done' || e.kind === 'milestone'
                       ? 'var(--phos-glow)'
-                      : 'var(--phos)',
+                      : e.kind === 'think'
+                        ? 'var(--phos-dim)'
+                        : e.kind === 'tool' || e.kind === 'code'
+                          ? 'var(--phos-glow)'
+                          : 'var(--phos)',
               }}
             >
               {e.msg}

@@ -281,9 +281,12 @@ html, body {
 .cr-led.busy { background: var(--amber-deep); color: var(--amber-deep); animation: cr-blink .8s step-end infinite; }
 .cr-led.off { background: var(--dim); color: transparent; }
 .cr-led.red { background: var(--rose); color: var(--rose); }
+.cr-led.blue { background: #1E3A8A; color: #1E3A8A; }
 
 @keyframes cr-blink { 50% { opacity: .35; } }
 @keyframes cr-flash { 50% { opacity: .55; } }
+@keyframes cr-draft-pulse { 0%, 100% { opacity: .85; } 50% { opacity: 1; } }
+@keyframes cr-fadein { from { opacity: 0; } to { opacity: 1; } }
 
 .cr-bar {
   display: grid;

@@ -1,7 +1,14 @@
-import { useRef, useState, type CSSProperties } from 'react'
+import {
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import { CrChip, CrLED } from './atoms/atoms'
 import { CrModeDial } from './mode-dial'
-import { CR_ROSTER } from '../data/roster'
+import { CR_PORTRAITS, CrSprite } from './atoms/sprite'
+import type { RosterMember } from '../data/roster'
 import { detectDeviceInsets } from '../lib/insets'
 import type { Variant } from './party-sidebar'
 
@@ -23,6 +30,11 @@ interface CrPromptShipBoxProps {
   mode?: string
   variant?: Variant
   onSend?: (payload: { mode: string; text: string }) => void
+  value?: string
+  onChangeText?: (v: string) => void
+  draftActive?: boolean
+  onCancel?: () => void
+  roster: RosterMember[]
 }
 
 type MenuKind = 'slash' | 'mention' | null
@@ -35,20 +47,32 @@ export function CrPromptShipBox({
   mode = 'orch',
   variant = 'desktop',
   onSend,
+  value,
+  onChangeText,
+  draftActive,
+  onCancel,
+  roster,
 }: CrPromptShipBoxProps) {
-  const [text, setText] = useState('')
+  const [textU, setTextU] = useState('')
+  const text = value !== undefined ? value : textU
+  const setText = (v: string) => {
+    if (onChangeText) onChangeText(v)
+    else setTextU(v)
+  }
+
   const [menu, setMenu] = useState<MenuKind>(null)
   const taRef = useRef<HTMLTextAreaElement | null>(null)
   const isMobile = variant === 'mobile'
 
-  const placeholder =
-    mode === 'ask'
+  const placeholder = draftActive
+    ? 'describe this quest · ⏎ to ship · binds to dotted card above'
+    : mode === 'ask'
       ? 'clarify before agents act · ⏎ to ask'
       : mode === 'assign'
         ? 'send one task to one agent · "@" · ⏎ to ship'
-        : 'compose a bundle of tasks · "/" · "@" · ⏎ to ship'
+        : 'describe a goal · ⏎ to plan a bundle · ⇥ switches mode'
 
-  const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const onChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const v = e.target.value
     setText(v)
     const last = lastToken(v)
@@ -73,12 +97,14 @@ export function CrPromptShipBox({
   }
 
   const mentionFilter = lastToken(text).slice(1).toLowerCase()
-  const mentions = CR_ROSTER.filter((r) => r.status !== 'off').filter(
-    (r) =>
-      !mentionFilter ||
-      r.name.toLowerCase().startsWith(mentionFilter) ||
-      r.id.toLowerCase().startsWith(mentionFilter),
-  )
+  const mentions = roster
+    .filter((r) => r.status !== 'off')
+    .filter(
+      (r) =>
+        !mentionFilter ||
+        r.name.toLowerCase().startsWith(mentionFilter) ||
+        r.id.toLowerCase().startsWith(mentionFilter),
+    )
   const slashFilter = lastToken(text)
   const slashes = CR_SLASH.filter((c) => c.cmd.startsWith(slashFilter || '/'))
 
@@ -190,13 +216,9 @@ export function CrPromptShipBox({
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0,
-                    fontSize: 11,
-                    fontWeight: 700,
-                    fontFamily: 'Silkscreen, monospace',
-                    imageRendering: 'pixelated',
                   }}
                 >
-                  {r.name.slice(0, 1)}
+                  <CrSprite art={CR_PORTRAITS[r.portrait]} size={20} bg="var(--cream)" />
                 </span>
                 <span
                   className="cr-mono"
@@ -255,7 +277,7 @@ export function CrPromptShipBox({
           onChange={onChange}
           placeholder={placeholder}
           rows={1}
-          onKeyDown={(e) => {
+          onKeyDown={(e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               send()
@@ -275,6 +297,38 @@ export function CrPromptShipBox({
             outline: 'none',
           }}
         />
+        {draftActive && onCancel && (
+          <button
+            onClick={onCancel}
+            title="cancel draft (esc)"
+            style={{
+              width: isMobile ? 36 : 56,
+              flexShrink: 0,
+              border: 'none',
+              borderLeft: '1.5px solid var(--line)',
+              background: 'var(--cream-md)',
+              color: 'var(--muted)',
+              fontFamily: "'Silkscreen',monospace",
+              fontSize: isMobile ? 12 : 10,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 4,
+            }}
+          >
+            {isMobile ? (
+              '✕'
+            ) : (
+              <>
+                <span>✕</span>
+                <span>CANCEL</span>
+              </>
+            )}
+          </button>
+        )}
         <button
           onClick={send}
           disabled={!text.trim()}
@@ -315,13 +369,36 @@ export function CrPromptShipBox({
 interface CrFooterProps {
   variant?: Variant
   onSend?: (payload: { mode: string; text: string }) => void
+  promptValue?: string
+  onChangePrompt?: (v: string) => void
+  draftActive?: boolean
+  mode?: string
+  onChangeMode?: (v: string) => void
+  onCancelDraft?: () => void
+  roster: RosterMember[]
 }
 
-export function CrFooter({ variant = 'desktop', onSend }: CrFooterProps) {
-  const [mode, setMode] = useState('orch')
+export function CrFooter({
+  variant = 'desktop',
+  onSend,
+  promptValue,
+  onChangePrompt,
+  draftActive,
+  mode: modeProp,
+  onChangeMode,
+  onCancelDraft,
+  roster,
+}: CrFooterProps) {
+  const [modeU, setModeU] = useState('orch')
+  const mode = modeProp !== undefined ? modeProp : modeU
+  const setMode = (v: string) => {
+    if (onChangeMode) onChangeMode(v)
+    else setModeU(v)
+  }
+
   const isMobile = variant === 'mobile'
   const devIns = detectDeviceInsets()
-  const readyAgents = CR_ROSTER.filter((r) => r.kind === 'agent' && r.status !== 'off').length
+  const readyAgents = roster.filter((r) => r.kind === 'agent' && r.status !== 'off').length
 
   return (
     <footer
@@ -358,14 +435,26 @@ export function CrFooter({ variant = 'desktop', onSend }: CrFooterProps) {
             justifyContent: 'center',
             padding: 4,
             borderRight: '1.5px solid var(--line)',
-            background: 'var(--cream-md)',
+            background: draftActive ? 'var(--amber)' : 'var(--cream-md)',
             flexShrink: 0,
+            boxShadow: draftActive ? 'inset 0 0 0 2px var(--amber-deep)' : 'none',
+            animation: draftActive ? 'cr-draft-pulse 1.6s ease-in-out infinite' : 'none',
+            transition: 'background 200ms ease',
           }}
         >
           <CrModeDial value={mode} onChange={setMode} variant={variant} />
         </div>
         <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
-          <CrPromptShipBox mode={mode} variant={variant} onSend={onSend} />
+          <CrPromptShipBox
+            mode={mode}
+            variant={variant}
+            onSend={onSend}
+            value={promptValue}
+            onChangeText={onChangePrompt}
+            draftActive={draftActive}
+            onCancel={onCancelDraft}
+            roster={roster}
+          />
         </div>
       </div>
       {!isMobile && (
