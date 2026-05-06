@@ -104,36 +104,7 @@ export function deriveHitl(tasks: Task[]): HitlItem[] {
     }))
 }
 
-// Mock questions agents ask the human when blocked.
-export const MOCK_QUESTIONS: readonly string[] = [
-  'I hit a missing DNS resolver mock — should I add a stub for `*.flaky.test`, or skip the test instead?',
-  'Schema migration touches `users.email` — keep the legacy column for one release, or drop it now?',
-  'The retry policy doubles latency on cold starts. Cap at 3 attempts, or surface as a config flag?',
-  'Two libs disagree on the date format. Stick with ISO 8601 everywhere, or follow the upstream API?',
-  'Rate limiter at 50 RPS will throttle one of our own services. Whitelist it, or raise the global cap?',
-  'Sandbox needs network access to run the integration test. Allow egress to `api.stripe.com` only?',
-  'Found two reasonable parser fixes — minimal patch (5 lines) or proper rewrite (~40 lines)?',
-]
-
-// Tiny mock decomposer — returns sub-quest titles based on the goal phrasing.
-export function decomposeGoal(goal: string): string[] {
-  const g = goal.toLowerCase()
-  if (g.includes('heartbeat') || g.includes('reliab')) {
-    return ['add /heartbeat endpoint', 'retry on flaky DNS', 'sandbox reset on timeout']
-  }
-  if (g.includes('auth') || g.includes('login') || g.includes('sign')) {
-    return ['wire up SSO callback', 'session refresh on 401', 'logout flushes party state']
-  }
-  if (g.includes('test') || g.includes('flak')) {
-    return ['identify flaky tests', 'quarantine + retry harness', 'replay digest in CI']
-  }
-  return [
-    `scout · explore "${truncate(goal, 24)}"`,
-    'brewer · implement core path',
-    'patcher · ship + verify',
-  ]
-}
-
-export function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n - 1) + '…' : s
-}
+// MOCK_QUESTIONS / decomposeGoal / truncate were removed when the mock
+// lifecycle was cut. Real HITL questions arrive as bundle events; real
+// task decomposition is a server-side planner concern, not a frontend
+// mock.

@@ -78,20 +78,57 @@ export function streamTask(taskId: string): EventSource {
 
 export interface BundleSummary {
   id: string
-  recipe_id?: string
-  prompt?: string
-  status?: string
-  default_agent_runtime_id?: string | null
+  recipe_id: string
+  prompt: string | null
+  status: string
+  created_by: string
+  created_at: string
+  owner_account_id: string | null
+  default_agent_runtime_id: string | null
 }
 
-export async function getBundle(bundleId: string): Promise<BundleSummary | null> {
+export interface BundleDetail {
+  bundle: BundleSummary
+  tasks: Task[]
+  events: unknown[]
+}
+
+export async function getBundle(bundleId: string): Promise<BundleDetail | null> {
   const r = await fetch(`${KREWHUB}/api/v1/bundles/${bundleId}`, {
     credentials: 'include',
   })
   if (r.status === 404) return null
   if (!r.ok) throw makeError(`bundle_${r.status}`, undefined, r.status)
-  const body = await r.json()
-  return (body?.bundle ?? body) as BundleSummary
+  return r.json()
+}
+
+export async function listBundles(recipeId: string): Promise<BundleSummary[]> {
+  const r = await fetch(`${KREWHUB}/api/v1/recipes/${recipeId}/bundles`, {
+    credentials: 'include',
+  })
+  if (!r.ok) throw makeError(`bundles_${r.status}`, undefined, r.status)
+  const body = (await r.json()) as { bundles?: BundleSummary[] }
+  return body.bundles ?? []
+}
+
+export async function createBundle(
+  recipeId: string,
+  prompt: string,
+): Promise<BundleSummary> {
+  const r = await fetch(`${KREWHUB}/api/v1/recipes/${recipeId}/bundles`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, requested_by: 'cookrew-beta', tasks: [] }),
+  })
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}))
+    const detail = body?.detail
+    const msg = typeof detail === 'string' ? detail : `bundle_create_${r.status}`
+    throw makeError(msg, undefined, r.status)
+  }
+  const body = (await r.json()) as { bundle: BundleSummary }
+  return body.bundle
 }
 
 // ── Agent runtimes ─────────────────────────────────────────────

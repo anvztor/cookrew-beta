@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { CallbackScreen } from '../components/auth-view/callback-screen'
 import { CrEventFeed } from '../components/event-feed'
 import { CrFooter } from '../components/footer'
@@ -9,41 +9,88 @@ import { HireAgentRuntimeModal } from '../components/auth-view/hire-agent-runtim
 import { CrHITLPopout } from '../components/hitl-popout'
 import { redirectToLogin } from '../lib/auth/auth-client'
 import { useAuth } from '../lib/auth/useAuth'
-import { createTask, listRuntimes, type Runtime } from '../lib/api/krewhub-client'
+import {
+  createBundle,
+  createTask,
+  getBundle,
+  listBundles,
+  listRuntimes,
+  type Runtime,
+  type Task as ApiTask,
+} from '../lib/api/krewhub-client'
 import { emitEvent } from '../lib/event-bus'
 import {
-  CR_ROSTER_INITIAL,
   runtimeToRoster,
   type RosterMember,
 } from '../data/roster'
-import {
-  decomposeGoal,
-  deriveHitl,
-  MOCK_QUESTIONS,
-  truncate,
-  type HitlItem,
-  type Task,
-} from '../data/tasks'
+import { deriveHitl, type HitlItem, type Task, type TaskStatus } from '../data/tasks'
 import type { Bundle } from '../components/bundle-tabs'
+import type { Account } from '../lib/auth/auth-client'
 
-const DEV_BUNDLE_ID =
-  (import.meta.env.VITE_KREWHUB_DEV_BUNDLE_ID as string | undefined) ?? 'BUN_DEV1'
+const RECIPE_ID =
+  (import.meta.env.VITE_KREWHUB_RECIPE_ID as string | undefined) ?? 'rec_fefc7a34'
 
 interface DesignBundle extends Bundle {
+  /** Same as id — kept so the existing BundleTabs typing stays unchanged. */
   id: string
 }
 
-const initialBundle = (): DesignBundle => ({
-  id: 'BUN_4A2C',
-  name: 'Heartbeat reliability sweep',
-  tasks: [],
-})
+function mapStatus(backendStatus: string): TaskStatus {
+  // Map krewhub task status strings → our UI lifecycle. Anything we
+  // don't recognise lands in 'queued' — treated as inert/visible.
+  switch (backendStatus) {
+    case 'open':
+    case 'pending':
+      return 'open'
+    case 'claimed':
+    case 'working':
+    case 'in_progress':
+      return 'working'
+    case 'done':
+    case 'completed':
+    case 'cleared':
+      return 'done'
+    case 'cooked':
+      return 'cooked'
+    case 'queued':
+      return 'queued'
+    default:
+      return 'queued'
+  }
+}
 
-const MODES = ['orch', 'assign', 'ask'] as const
-type ShipPayload = { mode: string; text: string }
+function backendTaskToUi(t: ApiTask, idx: number): Task {
+  const blocked = (t.status ?? '').toLowerCase() === 'blocked'
+  return {
+    id: t.id,
+    no: String(idx + 1).padStart(2, '0'),
+    title: t.title || '(untitled)',
+    status: mapStatus(t.status ?? 'queued'),
+    assignee: t.assigned_runtime_id ?? '—',
+    role: t.assigned_runtime_id ? 'AGENT' : '—',
+    adds: 0,
+    dels: 0,
+    blocked,
+    // Initial grid placement; CrTaskCanvas FORMAT button can re-layout.
+    x: 24 + (idx % 4) * 240,
+    y: 24 + Math.floor(idx / 4) * 156,
+  }
+}
 
-function makeBundleId(): string {
-  return 'BUN_' + Math.random().toString(36).slice(2, 6).toUpperCase()
+function humanRosterFromAccount(acc: Account): RosterMember {
+  const name = (acc.username || acc.account_id.slice(0, 8)).toUpperCase()
+  return {
+    id: acc.account_id,
+    kind: 'human',
+    name,
+    sub: 'OPERATOR',
+    portrait: 'human',
+    hp: 100,
+    max: 100,
+    used: 0,
+    ctxMax: 0,
+    status: 'on',
+  }
 }
 
 export function MobileApp() {
@@ -53,11 +100,11 @@ export function MobileApp() {
   const [feedOpen, setFeedOpen] = useState(false)
   const [hireOpen, setHireOpen] = useState(false)
 
-  const [roster, setRoster] = useState<RosterMember[]>(CR_ROSTER_INITIAL)
+  const [roster, setRoster] = useState<RosterMember[]>([])
 
-  const [bundles, setBundles] = useState<DesignBundle[]>(() => [initialBundle()])
-  const [activeBundleId, setActiveBundleId] = useState<string>(() => bundles[0].id)
-  const activeBundle = bundles.find((b) => b.id === activeBundleId) ?? bundles[0]
+  const [bundles, setBundles] = useState<DesignBundle[]>([])
+  const [activeBundleId, setActiveBundleId] = useState<string>('')
+  const activeBundle = bundles.find((b) => b.id === activeBundleId)
   const tasks = activeBundle?.tasks ?? []
 
   const setTasks = useCallback(
@@ -77,7 +124,7 @@ export function MobileApp() {
   const [prompt, setPrompt] = useState('')
   const [mode, setMode] = useState<string>('orch')
   const [toast, setToast] = useState<string | null>(null)
-  const [formatTick, setFormatTick] = useState(0)
+  const [formatTick] = useState(0)
   const [hitlOpen, setHitlOpen] = useState<HitlItem | null>(null)
   const [shipError, setShipError] = useState<string | null>(null)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
@@ -87,345 +134,103 @@ export function MobileApp() {
     setTimeout(() => setToast(null), ms)
   }
 
-  const onlineCount = roster.filter((r) => r.status !== 'off').length
+  const accountId = state.status === 'authed' ? state.account.account_id : undefined
 
-  // ── Bundle ops ───────────────────────────────────────────────
-  const addBundle = () => {
-    const b: DesignBundle = { id: makeBundleId(), name: 'New mission', tasks: [] }
-    setBundles((bs) => [...bs, b])
-    setActiveBundleId(b.id)
-    setDraftId(null)
-    setPrompt('')
-    emitEvent({ src: 'SYS', kind: 'bundle', msg: `>> BUNDLE ${b.id} CREATED · "${b.name}"` })
-  }
-  const closeBundle = (id: string) => {
-    setBundles((bs) => {
-      if (bs.length <= 1) return bs
-      const next = bs.filter((b) => b.id !== id)
-      if (id === activeBundleId) {
-        const idx = bs.findIndex((b) => b.id === id)
-        const pick = next[Math.max(0, idx - 1)] ?? next[0]
-        setActiveBundleId(pick.id)
-      }
-      emitEvent({ src: 'SYS', kind: 'warn', msg: `!! BUNDLE ${id} CLOSED` })
-      return next
-    })
-  }
-  const renameBundle = (id: string, name: string) => {
-    setBundles((bs) => bs.map((b) => (b.id === id ? { ...b, name } : b)))
-  }
-
-  // ── DAG auto-layout (depth columns + barycenter rows) ─────────
-  const formatBoard = () => {
-    setTasks((ts) => {
-      if (ts.length === 0) return ts
-      const PAD_X = 24
-      const PAD_Y = 24
-      const isMobileVP = window.innerWidth < 720
-      const CARD_W = isMobileVP ? 180 : 220
-      const CARD_H = isMobileVP ? 120 : 132
-      const COL_GAP = 56
-      const ROW_GAP = 24
-      const COL_W = CARD_W + COL_GAP
-      const ROW_H = CARD_H + ROW_GAP
-
-      const byId: Record<string, Task> = Object.fromEntries(ts.map((t) => [t.id, t]))
-      const depth: Record<string, number> = {}
-      const visit = (id: string, stack: Set<string>): number => {
-        if (depth[id] !== undefined) return depth[id]
-        if (stack.has(id)) return 0
-        stack.add(id)
-        const deps = (byId[id]?.deps ?? []).filter((d) => byId[d])
-        const d = deps.length === 0 ? 0 : 1 + Math.max(...deps.map((dep) => visit(dep, stack)))
-        stack.delete(id)
-        depth[id] = d
-        return d
-      }
-      ts.forEach((t) => visit(t.id, new Set()))
-
-      const cols: Record<number, Task[]> = {}
-      ts.forEach((t) => {
-        const c = depth[t.id] || 0
-        ;(cols[c] = cols[c] || []).push(t)
-      })
-      const depthKeys = Object.keys(cols).map(Number).sort((a, b) => a - b)
-
-      const rowOf: Record<string, number> = {}
-      cols[depthKeys[0]]?.sort((a, b) => String(a.no).localeCompare(String(b.no)))
-      cols[depthKeys[0]]?.forEach((t, i) => {
-        rowOf[t.id] = i
-      })
-
-      for (let k = 1; k < depthKeys.length; k++) {
-        const list = cols[depthKeys[k]]
-        const scored = list.map((t) => {
-          const ps = (t.deps || []).filter((d) => rowOf[d] !== undefined)
-          const score = ps.length
-            ? ps.reduce((s, d) => s + rowOf[d], 0) / ps.length
-            : Infinity
-          return { t, score }
-        })
-        scored.sort((a, b) =>
-          a.score - b.score || String(a.t.no).localeCompare(String(b.t.no)),
-        )
-        let nextSlot = 0
-        scored.forEach(({ t, score }) => {
-          const target = Number.isFinite(score) ? Math.round(score) : nextSlot
-          const slot = Math.max(target, nextSlot)
-          rowOf[t.id] = slot
-          nextSlot = slot + 1
-        })
-      }
-
-      const colMinRow: Record<number, number> = {}
-      const colMaxRow: Record<number, number> = {}
-      depthKeys.forEach((c) => {
-        const rs = cols[c].map((t) => rowOf[t.id])
-        colMinRow[c] = Math.min(...rs)
-        colMaxRow[c] = Math.max(...rs)
-      })
-      const colSpans = depthKeys.map((c) => colMaxRow[c] - colMinRow[c])
-      const globalRows = Math.max(...colSpans, 0)
-
-      const next = ts.map((t) => ({ ...t }))
-      const byNextId = Object.fromEntries(next.map((t) => [t.id, t]))
-
-      depthKeys.forEach((c, i) => {
-        const span = colSpans[i]
-        const yOffset = ((globalRows - span) / 2) * ROW_H
-        cols[c].forEach((t) => {
-          const localRow = rowOf[t.id] - colMinRow[c]
-          byNextId[t.id].x = PAD_X + i * COL_W
-          byNextId[t.id].y = PAD_Y + yOffset + localRow * ROW_H
-        })
-      })
-
-      return next
-    })
-    setFormatTick((n) => n + 1)
-  }
-
-  // ── OPEN → IN PROGRESS watcher ───────────────────────────────
-  const openSig = tasks
-    .filter((t) => t.status === 'open' && !t.blocked)
-    .map((t) => t.id + ':' + (t.openedAt ?? 0))
-    .join('|')
-  const freeSig = roster
-    .filter((r) => r.kind === 'agent' && r.status === 'on')
-    .map((r) => r.id)
-    .join('|')
-
-  useEffect(() => {
-    if (!openSig || !freeSig) return
-    const open = tasks
-      .filter((t) => t.status === 'open' && !t.blocked)
-      .sort((a, b) => (a.openedAt ?? 0) - (b.openedAt ?? 0))
-    const free = roster.find((r) => r.kind === 'agent' && r.status === 'on')
-    if (!open.length || !free) return
-
-    const oldest = open[0]
-    const minOpenMs = 1500
-    const elapsed = Date.now() - (oldest.openedAt ?? 0)
-    const wait = Math.max(0, minOpenMs - elapsed)
-
-    const timer = setTimeout(() => {
-      setTasks((ts) => {
-        const t = ts.find((x) => x.id === oldest.id)
-        if (!t || t.status !== 'open') return ts
-        return ts.map((x) =>
-          x.id === oldest.id
-            ? {
-                ...x,
-                status: 'working',
-                assignee: free.name,
-                role: (free.sub.split('·')[0] ?? '').trim().toUpperCase(),
-                workingAt: Date.now(),
-              }
-            : x,
-        )
-      })
-      setRoster((r) =>
-        r.map((a) =>
-          a.id === free.id
-            ? {
-                ...a,
-                status: 'busy',
-                used: Math.min(a.ctxMax, (a.used ?? 0) + 4200),
-              }
-            : a,
-        ),
-      )
+  // ── 1. Roster: human from /me, agents from /api/v1/agents/runtimes ─
+  const refreshRoster = useCallback(async (acc: Account) => {
+    try {
+      const runtimes = await listRuntimes(acc.account_id)
+      const agents = runtimes.map(runtimeToRoster)
+      setRoster([humanRosterFromAccount(acc), ...agents])
+    } catch (e) {
+      const err = e as { message?: string }
       emitEvent({
-        src: free.name.toUpperCase(),
-        kind: 'claim',
-        msg: `@${free.name.toLowerCase()} CLAIMED quest #${oldest.no} "${(oldest.title || '').slice(0, 42)}"`,
+        src: 'SYS',
+        kind: 'warn',
+        msg: `!! roster fetch failed: ${err.message ?? 'unknown'}`,
       })
-      const fname = free.name.toUpperCase()
-      const qno = oldest.no
-      setTimeout(
-        () =>
-          emitEvent({
-            src: fname,
-            kind: 'tool',
-            msg: `bash$ git checkout -b agent/${free.name.toLowerCase()}-q${qno}`,
-          }),
-        600,
-      )
-      setTimeout(
-        () =>
-          emitEvent({
-            src: fname,
-            kind: 'think',
-            msg: `... reading repo · planning approach for #${qno}`,
-          }),
-        1500,
-      )
-      showToast(`${free.name} claimed quest #${oldest.no}`, 2200)
-    }, wait)
-    return () => clearTimeout(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openSig, freeSig])
+      setRoster([humanRosterFromAccount(acc)])
+    }
+  }, [])
 
-  // ── Working → done|blocked lifecycle ─────────────────────────
-  const lifecycleRef = useRef<{ scheduled: Set<string> }>({ scheduled: new Set() })
   useEffect(() => {
-    const sched = lifecycleRef.current
-    tasks.forEach((t) => {
-      if (t.status !== 'working') return
-      if (t.hitl) return
-      const key = t.id + ':' + (t.workingAt ?? 0)
-      if (sched.scheduled.has(key)) return
-      sched.scheduled.add(key)
-      const wait = 4500 + Math.floor(Math.random() * 4500)
-      const willBlock = Math.random() < 0.45
-      setTimeout(() => {
-        setTasks((ts) =>
-          ts.map((x) => {
-            if (x.id !== t.id || x.status !== 'working' || x.hitl) return x
-            if (willBlock) {
-              const Q = MOCK_QUESTIONS[Math.floor(Math.random() * MOCK_QUESTIONS.length)]
-              emitEvent({
-                src: (x.assignee || 'AGENT').toUpperCase(),
-                kind: 'warn',
-                msg: `⚠ #${x.no} BLOCKED · "${Q.slice(0, 56)}"`,
-              })
-              return {
-                ...x,
-                hitl: 'needs_input' as const,
-                hitlPending: 'just now',
-                hitlOverdue: false,
-                hitlQuestion: Q,
-                hitlAt: Date.now(),
-              }
-            }
-            const adds = 8 + Math.floor(Math.random() * 60)
-            const dels = Math.floor(Math.random() * 24)
-            emitEvent({
-              src: (x.assignee || 'AGENT').toUpperCase(),
-              kind: 'code',
-              msg: `ƒ PUSH #${x.no} · +${adds}/−${dels}`,
-            })
-            emitEvent({
-              src: (x.assignee || 'AGENT').toUpperCase(),
-              kind: 'done',
-              msg: `✓ QUEST #${x.no} CLEARED`,
-            })
-            setTimeout(() => {
-              setRoster((r) =>
-                r.map((a) =>
-                  a.name &&
-                  a.name.toUpperCase() === (x.assignee || '').toUpperCase() &&
-                  a.status === 'busy'
-                    ? { ...a, status: 'on' }
-                    : a,
-                ),
-              )
-            }, 0)
-            return { ...x, status: 'done' as const, adds, dels }
-          }),
-        )
-      }, wait)
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks])
+    if (state.status !== 'authed') return
+    void refreshRoster(state.account)
+  }, [state, refreshRoster])
 
-  // ── HITL pending-time ticker ─────────────────────────────────
-  useEffect(() => {
-    const id = setInterval(() => {
-      setTasks((ts) =>
-        ts.map((t) => {
-          if (!t.hitl || !t.hitlAt) return t
-          const sec = Math.round((Date.now() - t.hitlAt) / 1000)
-          const label =
-            sec < 60 ? `${sec}s` : sec < 3600 ? `${Math.round(sec / 60)}m` : `${Math.round(sec / 3600)}h`
-          const overdue = sec >= 90
-          if (t.hitlPending === label && t.hitlOverdue === overdue) return t
-          return { ...t, hitlPending: label, hitlOverdue: overdue }
+  // ── 2. Bundle bootstrap: list bundles for the configured recipe ──
+  // Real bundles only — no frontend-only `BUN_4A2C` placeholder.
+  const refreshBundles = useCallback(async () => {
+    try {
+      const summaries = await listBundles(RECIPE_ID)
+      const detailed = await Promise.all(
+        summaries.map(async (b) => {
+          const detail = await getBundle(b.id)
+          const tasksUi: Task[] =
+            detail?.tasks.map((t, i) => backendTaskToUi(t, i)) ?? []
+          return {
+            id: b.id,
+            name: b.prompt ? b.prompt.slice(0, 32) : b.id,
+            tasks: tasksUi,
+          } as DesignBundle
         }),
       )
-    }, 5000)
-    return () => clearInterval(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // ── Boot announcement ────────────────────────────────────────
-  useEffect(() => {
-    emitEvent({
-      src: 'SYS',
-      kind: 'bundle',
-      msg: `>> BUNDLE ${activeBundleId} OPENED · "${activeBundle?.name ?? ''}" · empty board`,
-    })
-    emitEvent({ src: 'SYS', kind: 'bundle', msg: '>> SSE channel attached · krewhub feed live' })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // ── Roster sync from krewhub ────────────────────────────────
-  // Replace any prior agent rows with a fresh projection of the user's
-  // krewhub agent_runtimes — keeps the human operator at the top.
-  const applyRuntimes = useCallback((runtimes: Runtime[]) => {
-    setRoster((prev) => {
-      const human = prev.find((m) => m.kind === 'human') ?? CR_ROSTER_INITIAL[0]
-      const agents = runtimes.map(runtimeToRoster)
-      return [human, ...agents]
-    })
-  }, [])
-
-  // Initial roster fetch — runs once we know the user's account_id.
-  const accountId =
-    state.status === 'authed' ? state.account.account_id : undefined
-  useEffect(() => {
-    if (!accountId) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const runtimes = await listRuntimes(accountId)
-        if (cancelled) return
-        applyRuntimes(runtimes)
-        if (runtimes.length > 0) {
-          emitEvent({
-            src: 'SYS',
-            kind: 'bundle',
-            msg: `>> ROSTER LOADED · ${runtimes.length} paired agent(s)`,
-          })
-        }
-      } catch (e) {
-        if (cancelled) return
-        const err = e as { message?: string }
-        emitEvent({
-          src: 'SYS',
-          kind: 'warn',
-          msg: `!! roster fetch failed: ${err.message ?? 'unknown'}`,
-        })
-      }
-    })()
-    return () => {
-      cancelled = true
+      setBundles(detailed)
+      setActiveBundleId((cur) => {
+        if (cur && detailed.some((b) => b.id === cur)) return cur
+        return detailed[0]?.id ?? ''
+      })
+      emitEvent({
+        src: 'SYS',
+        kind: 'bundle',
+        msg: `>> ${detailed.length} bundle(s) loaded for recipe ${RECIPE_ID}`,
+      })
+    } catch (e) {
+      const err = e as { message?: string }
+      emitEvent({
+        src: 'SYS',
+        kind: 'warn',
+        msg: `!! bundle list failed: ${err.message ?? 'unknown'}`,
+      })
     }
-  }, [accountId, applyRuntimes])
+  }, [])
 
-  // Called by HireAgentRuntimeModal after a successful pair.
+  useEffect(() => {
+    if (state.status !== 'authed') return
+    void refreshBundles()
+  }, [state.status, refreshBundles])
+
+  // Light polling (every 6s) of the active bundle so completed-status
+  // updates from the daemon are visible without per-task SSE wiring.
+  useEffect(() => {
+    if (!activeBundleId) return
+    const id = setInterval(async () => {
+      try {
+        const detail = await getBundle(activeBundleId)
+        if (!detail) return
+        setBundles((bs) =>
+          bs.map((b) =>
+            b.id !== activeBundleId
+              ? b
+              : {
+                  ...b,
+                  tasks: detail.tasks.map((t, i) => backendTaskToUi(t, i)),
+                },
+          ),
+        )
+      } catch {
+        // transient errors — ignore; next tick will retry.
+      }
+    }, 6000)
+    return () => clearInterval(id)
+  }, [activeBundleId])
+
+  // ── 3. Hire flow refreshes roster after pair ────────────────────
   const handlePaired = (runtimes: Runtime[]) => {
-    applyRuntimes(runtimes)
+    if (state.status === 'authed') {
+      const human = humanRosterFromAccount(state.account)
+      setRoster([human, ...runtimes.map(runtimeToRoster)])
+    }
     runtimes.forEach((rt) => {
       const r = runtimeToRoster(rt)
       emitEvent({
@@ -437,15 +242,45 @@ export function MobileApp() {
     showToast(`Paired · ${runtimes.length} agent${runtimes.length === 1 ? '' : 's'} online`, 2400)
   }
 
-  // ── Live-bind prompt → draft title ───────────────────────────
-  useEffect(() => {
-    if (!draftId) return
-    setTasks((ts) => ts.map((t) => (t.id === draftId ? { ...t, title: prompt } : t)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prompt, draftId])
+  // ── 4. Bundle create (the "+ NEW" tab) — real POST ──────────────
+  const addBundle = async () => {
+    if (state.status !== 'authed') return
+    try {
+      const b = await createBundle(RECIPE_ID, 'New mission')
+      setBundles((bs) => [...bs, { id: b.id, name: b.prompt ?? b.id, tasks: [] }])
+      setActiveBundleId(b.id)
+      setDraftId(null)
+      setPrompt('')
+      emitEvent({
+        src: 'SYS',
+        kind: 'bundle',
+        msg: `>> BUNDLE ${b.id} CREATED · "${b.prompt ?? ''}"`,
+      })
+    } catch (e) {
+      const err = e as { message?: string }
+      showToast(`Bundle create failed: ${err.message}`, 2600)
+    }
+  }
+  // Bundle close/rename are local-only UX (krewhub has no delete/rename).
+  const closeBundle = (id: string) => {
+    setBundles((bs) => bs.filter((b) => b.id !== id))
+    if (id === activeBundleId) {
+      setActiveBundleId((cur) => {
+        const next = bundles.find((b) => b.id !== cur)
+        return next?.id ?? ''
+      })
+    }
+  }
+  const renameBundle = (id: string, name: string) => {
+    setBundles((bs) => bs.map((b) => (b.id === id ? { ...b, name } : b)))
+  }
 
-  // ── Drafts ──────────────────────────────────────────────────
+  // ── 5. Drafts (local pre-ship UI only) ──────────────────────────
   const addDraft = ({ x, y }: { x: number; y: number }) => {
+    if (!activeBundleId) {
+      showToast('Hire an agent or wait for a bundle to load first', 2400)
+      return
+    }
     const id = 'd' + Date.now()
     const no = String(tasks.length + 1).padStart(2, '0')
     setTasks((ts) => [
@@ -477,7 +312,6 @@ export function MobileApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftId])
 
-  // ESC cancels active draft
   useEffect(() => {
     if (!draftId) return
     const onKey = (e: KeyboardEvent) => {
@@ -487,7 +321,14 @@ export function MobileApp() {
     return () => window.removeEventListener('keydown', onKey)
   }, [draftId, cancelDraft])
 
-  // Tab cycles modes
+  useEffect(() => {
+    if (!draftId) return
+    setTasks((ts) => ts.map((t) => (t.id === draftId ? { ...t, title: prompt } : t)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prompt, draftId])
+
+  // Tab cycles modes (kept; no backend coupling)
+  const MODES = ['orch', 'assign', 'ask'] as const
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return
@@ -504,7 +345,7 @@ export function MobileApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
 
-  // Cycle-safe link
+  // Local link edit — purely visual; krewhub doesn't accept inline dep edits yet.
   const linkTasks = (srcId: string, tgtId: string) => {
     if (!srcId || !tgtId || srcId === tgtId) return
     setTasks((ts) => {
@@ -531,150 +372,71 @@ export function MobileApp() {
         seen.add(id)
         ;(depMap[id] || []).forEach((d) => stack.push(d))
       }
-      showToast(`Linked #${src.no} → #${tgt.no}`, 1600)
+      showToast(`Linked #${src.no} → #${tgt.no} (local)`, 1600)
       return ts.map((t) => (t.id === tgtId ? { ...t, deps: [...existing, srcId] } : t))
     })
   }
 
-  // ── ORCH flow ───────────────────────────────────────────────
-  const runOrch = (goal: string) => {
-    const id = 'orch_' + Date.now()
-    const no = String(tasks.length + 1).padStart(2, '0')
-    const vp = document.querySelector('[data-cr-canvas]')
-    const VW = vp ? (vp as HTMLElement).clientWidth : 900
-    const orchX = Math.max(40, VW - 280)
-    const orchY = 40
-    const orchTask: Task = {
-      id,
-      no,
-      title: goal,
-      status: 'orch',
-      assignee: 'PLANNER',
-      role: 'ORCH',
-      adds: 0,
-      dels: 0,
-      x: orchX,
-      y: orchY,
-      orchPhase: 'thinking',
-      orchLog: [],
-      bundleCount: 0,
+  // formatTick is supplied directly to CrMissionBoard; nothing else
+  // triggers a relayout right now (FORMAT button lives inside the canvas).
+
+  // ── 6. Ship — real backend createTask ───────────────────────────
+  // No mock lifecycle. The daemon will pick up the OPEN task and the
+  // 6s polling refresh will surface the state transitions.
+  const shipReal = async (text: string): Promise<ApiTask | null> => {
+    if (!activeBundleId) {
+      setShipError('No bundle yet — refresh in a few seconds.')
+      return null
     }
-    setTasks((ts) => [...ts, orchTask])
-    emitEvent({ src: 'PLANNER', kind: 'think', msg: `▸ orchestrating: "${goal.slice(0, 48)}"` })
-
-    const subs = decomposeGoal(goal)
-    const lines = [
-      { text: `parsing goal: "${truncate(goal, 36)}"`, tone: 'dim' as const },
-      { text: 'walking repo · krewcli/* · server/*', tone: 'dim' as const },
-      { text: 'identifying dependencies …', tone: 'dim' as const },
-      { text: `decomposing into ${subs.length} quests`, tone: 'hi' as const },
-    ]
-    lines.forEach((ln, i) => {
-      setTimeout(() => {
-        setTasks((ts) =>
-          ts.map((t) =>
-            t.id === id ? { ...t, orchLog: [...(t.orchLog || []), ln] } : t,
-          ),
-        )
-        emitEvent({
-          src: 'PLANNER',
-          kind: ln.tone === 'hi' ? 'milestone' : 'think',
-          msg: ln.text,
-        })
-      }, 500 + i * 700)
-    })
-
-    const spawnAt = 500 + lines.length * 700 + 400
-    setTimeout(() => {
-      setTasks((ts) => {
-        const without = ts.filter((t) => t.id !== id)
-        const baseX = orchX
-        const newTasks: Task[] = subs.map((sub, i) => {
-          const childId = `${id}_c${i}`
-          const childNo = String(without.length + 1 + i).padStart(2, '0')
-          const deps = i > 0 ? [`${id}_c${i - 1}`] : []
-          return {
-            id: childId,
-            no: childNo,
-            title: sub,
-            status: 'draft',
-            assignee: '—',
-            role: '—',
-            adds: 0,
-            dels: 0,
-            x: baseX + i * 240,
-            y: orchY,
-            deps,
-          }
-        })
-        return [...without, ...newTasks]
-      })
+    try {
+      const { task } = await createTask(activeBundleId, text)
+      setShipError(null)
+      setActiveTaskId(task.id)
       emitEvent({
         src: 'SYS',
         kind: 'bundle',
-        msg: `>> BUNDLE EXPANDED · ${subs.length} draft quests linked`,
+        msg: `>> TASK #${task.id.slice(-6)} CREATED · "${text.slice(0, 50)}"`,
       })
-      setTimeout(() => formatBoard(), 50)
-      showToast(`Orch · spawned ${subs.length} draft quests`, 2400)
-    }, spawnAt)
-  }
-
-  // ── Send / ship ─────────────────────────────────────────────
-  const tryRealCreateTask = async (title: string) => {
-    if (state.status !== 'authed') return
-    try {
-      const { task } = await createTask(DEV_BUNDLE_ID, title)
-      setActiveTaskId(task.id)
-      setShipError(null)
+      return task
     } catch (e) {
       const err = e as { code?: string; message?: string }
-      if (err.code === 'no_paired_agent') {
-        // Soft-fail: let the design's mock lifecycle continue.
-        return
-      }
-      setShipError(err.message ?? 'Failed to ship')
+      const detail =
+        err.code === 'no_paired_agent'
+          ? 'Hire an agent first'
+          : (err.message ?? 'Failed to ship')
+      setShipError(detail)
+      emitEvent({ src: 'SYS', kind: 'warn', msg: `!! ship failed: ${detail}` })
+      return null
     }
   }
 
-  const handleSend = ({ text }: ShipPayload) => {
-    if (!text.trim()) return
+  const handleSend = async ({ text }: { mode: string; text: string }) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
     if (draftId) {
-      const tid = draftId
-      const now = Date.now()
-      const draft = tasks.find((t) => t.id === tid)
-      const qno = draft ? draft.no : '??'
-      setTasks((ts) =>
-        ts.map((t) =>
-          t.id === tid
-            ? {
-                ...t,
-                title: text.trim(),
-                status: 'open' as const,
-                assignee: '—',
-                role: '—',
-                adds: 0,
-                dels: 0,
-                openedAt: now,
-              }
-            : t,
-        ),
-      )
-      emitEvent({
-        src: 'SYS',
-        kind: 'bundle',
-        msg: `>> QUEST #${qno} SHIPPED · "${text.trim().slice(0, 50)}" · awaiting claim`,
-      })
-      showToast('Quest opened — awaiting agent…', 1800)
+      // Replace the draft with the real task on success.
+      const oldId = draftId
+      const apiTask = await shipReal(trimmed)
       setDraftId(null)
       setPrompt('')
-      void tryRealCreateTask(text.trim())
-    } else if (mode === 'orch') {
-      runOrch(text.trim())
-      setPrompt('')
-    } else {
-      setPrompt('')
-      showToast('Tip: double-click the board to draft a quest first', 2400)
+      if (apiTask) {
+        setTasks((ts) => {
+          const filtered = ts.filter((t) => t.id !== oldId)
+          return [...filtered, backendTaskToUi(apiTask, filtered.length)]
+        })
+        showToast('Quest opened — awaiting agent…', 1800)
+      } else {
+        // Keep the draft so the user can retry.
+        setDraftId(oldId)
+        setPrompt(trimmed)
+      }
+      return
     }
+    // No active draft — ship a one-shot task. (No mock orch
+    // decomposition; if the user wants a multi-step plan they can ship
+    // tasks individually.)
+    await shipReal(trimmed)
+    setPrompt('')
   }
 
   const onSelectTask = (t: Task) => {
@@ -697,10 +459,9 @@ export function MobileApp() {
     setPrompt(v)
     setTasks((ts) => ts.map((t) => (t.id === draftId ? { ...t, title: v } : t)))
   }
+  const onShipDraft = () => void handleSend({ mode, text: prompt })
 
-  const onShipDraft = () => handleSend({ mode, text: prompt })
-
-  // ── Auth gate ───────────────────────────────────────────────
+  // ── Auth gate ───────────────────────────────────────────────────
   useEffect(() => {
     if (state.status === 'anon' && window.location.pathname !== '/auth/callback') {
       void redirectToLogin()
@@ -728,13 +489,13 @@ export function MobileApp() {
     )
   }
 
-  // ── Render ──────────────────────────────────────────────────
   const closeDrawers = () => {
     setPartyOpen(false)
     setFeedOpen(false)
   }
   const cls = `cr cr-app${partyOpen ? ' party-open' : ''}${feedOpen ? ' feed-open' : ''}`
   const liveHitl = deriveHitl(tasks)
+  const onlineCount = roster.filter((r) => r.status !== 'off').length
 
   return (
     <div className={cls} data-screen-label="Arcade · Mobile">
@@ -761,10 +522,10 @@ export function MobileApp() {
           variant="mobile"
           tasks={tasks}
           hitl={liveHitl}
-          bundles={bundles}
+          bundles={bundles as Bundle[]}
           activeBundleId={activeBundleId}
           onSelectBundle={setActiveBundleId}
-          onAddBundle={addBundle}
+          onAddBundle={() => void addBundle()}
           onCloseBundle={closeBundle}
           onRenameBundle={renameBundle}
           onAddDraft={addDraft}
@@ -795,7 +556,7 @@ export function MobileApp() {
       <CrFooter
         variant="mobile"
         roster={roster}
-        onSend={handleSend}
+        onSend={(p) => void handleSend(p)}
         promptValue={prompt}
         onChangePrompt={setPrompt}
         draftActive={!!draftId}
@@ -839,50 +600,11 @@ export function MobileApp() {
           item={hitlOpen}
           task={tasks.find((t) => t.id === hitlOpen.taskId)}
           onClose={() => setHitlOpen(null)}
-          onSubmit={(payload) => {
-            const tid = hitlOpen.taskId
-            const tnow = tasks.find((t) => t.id === tid)
-            if (payload.kind === 'answer') {
-              setTasks((ts) =>
-                ts.map((t) =>
-                  t.id === tid
-                    ? {
-                        ...t,
-                        status: 'open',
-                        assignee: '—',
-                        role: '—',
-                        hitl: undefined,
-                        hitlPending: undefined,
-                        hitlQuestion: undefined,
-                        hitlAt: undefined,
-                        hitlOverdue: undefined,
-                        workingAt: undefined,
-                      }
-                    : t,
-                ),
-              )
-              if (tnow && tnow.assignee && tnow.assignee !== '—') {
-                setRoster((r) =>
-                  r.map((a) =>
-                    a.name &&
-                    a.name.toUpperCase() === tnow.assignee.toUpperCase() &&
-                    a.status === 'busy'
-                      ? { ...a, status: 'on' }
-                      : a,
-                  ),
-                )
-              }
-              emitEvent({
-                src: 'ALEX',
-                kind: 'prompt',
-                msg: `▸ HUMAN ANSWERED #${tnow?.no ?? '??'} · returning to OPEN`,
-              })
-              showToast('▸ Sent · #' + (tnow?.no ?? '') + ' returned to OPEN', 2000)
-            } else {
-              emitEvent({ src: 'ALEX', kind: 'warn', msg: `⏸ HOLD #${tnow?.no ?? '??'}` })
-              showToast('⏸ Holding', 2000)
-            }
+          onSubmit={() => {
+            // No mock answer pipeline — just close. A future change can
+            // POST the answer to a krewhub HITL endpoint.
             setHitlOpen(null)
+            showToast('HITL answer flow not yet wired to backend', 2400)
           }}
         />
       )}
