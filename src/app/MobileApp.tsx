@@ -23,6 +23,7 @@ import {
 // (see CrEventFeed → useRecipeStream). Anything we'd emit here would
 // be frontend narration, which is exactly what we removed.
 import {
+  dedupeLiveDaemonRuntimes,
   runtimeToRoster,
   type RosterMember,
 } from '../data/roster'
@@ -157,7 +158,7 @@ export function MobileApp() {
   const refreshRoster = useCallback(async (acc: Account) => {
     try {
       const runtimes = await listRuntimes(acc.account_id)
-      const agents = runtimes.map(runtimeToRoster)
+      const agents = dedupeLiveDaemonRuntimes(runtimes).map(runtimeToRoster)
       setRoster([humanRosterFromAccount(acc), ...agents])
     } catch (e) {
       const err = e as { message?: string }
@@ -251,11 +252,12 @@ export function MobileApp() {
 
   // ── 3. Hire flow refreshes roster after pair ────────────────────
   const handlePaired = (runtimes: Runtime[]) => {
+    const liveRuntimes = dedupeLiveDaemonRuntimes(runtimes)
     if (state.status === 'authed') {
       const human = humanRosterFromAccount(state.account)
-      setRoster([human, ...runtimes.map(runtimeToRoster)])
+      setRoster([human, ...liveRuntimes.map(runtimeToRoster)])
     }
-    showToast(`Paired · ${runtimes.length} agent${runtimes.length === 1 ? '' : 's'} online`, 2400)
+    showToast(`Paired · ${liveRuntimes.length} agent${liveRuntimes.length === 1 ? '' : 's'} online`, 2400)
   }
 
   // ── 4. Bundle create (the "+ NEW" tab) — real POST ──────────────

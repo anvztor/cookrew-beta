@@ -139,6 +139,35 @@ export interface RuntimeView {
   started_at: string
 }
 
+function runtimeDeviceKey(rt: RuntimeView): string {
+  const host = rt.host_info || {}
+  const device =
+    typeof host['device_id'] === 'string'
+      ? host['device_id']
+      : typeof host['hostname'] === 'string'
+        ? host['hostname']
+        : typeof host['endpoint_url'] === 'string'
+          ? host['endpoint_url']
+          : rt.id
+  return `${rt.account_id}:${rt.agent_id}:${rt.provider ?? ''}:${device}`
+}
+
+export function dedupeLiveDaemonRuntimes<T extends RuntimeView>(runtimes: T[]): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const rt of runtimes) {
+    if (rt.status === 'offline') continue
+    // Pairing placeholders have neither a provider nor daemon metadata;
+    // they are not actual running agents and should not fill PARTY.
+    if (!rt.provider && !rt.daemon_version) continue
+    const key = runtimeDeviceKey(rt)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(rt)
+  }
+  return out
+}
+
 export function runtimeToRoster(rt: RuntimeView): RosterMember {
   const provider = rt.provider || 'krewcli'
   const subParts = [provider]
