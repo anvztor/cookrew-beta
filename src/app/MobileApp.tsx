@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CallbackScreen } from '../components/auth-view/callback-screen'
 import { CrEventFeed } from '../components/event-feed'
 import { CrFooter } from '../components/footer'
@@ -266,6 +266,7 @@ export function MobileApp() {
       setBundles((bs) => [...bs, { id: b.id, name: b.prompt ?? b.id, tasks: [] }])
       setActiveBundleId(b.id)
       setDraftId(null)
+      draftIdRef.current = null
       setPrompt('')
       // Real bundle.created event will appear in the feed via SSE.
     } catch (e) {
@@ -288,12 +289,31 @@ export function MobileApp() {
   }
 
   // ── 5. Drafts (local pre-ship UI only) ──────────────────────────
+  // Single-draft policy: if a draft is already on the board, an extra
+  // double-click moves it to the new pointer location instead of
+  // spawning a duplicate. The v8-design "leave prior drafts on board"
+  // behaviour produced confusing TWO-DRAFT screens whenever the user
+  // dblclicked twice in quick succession — React batches the
+  // setDraftId(...) call so a second dblclick that fires before the
+  // re-render still sees `draftId === null` and races a fresh draft
+  // through. We track the live draft id in a ref so the second
+  // dblclick sees it synchronously and short-circuits.
+  const draftIdRef = useRef<string | null>(null)
   const addDraft = ({ x, y }: { x: number; y: number }) => {
     if (!activeBundleId) {
       showToast('Hire an agent or wait for a bundle to load first', 2400)
       return
     }
+    if (draftIdRef.current) {
+      // Already drafting — just relocate the existing card to the
+      // new click point so the operator gets visible feedback. No
+      // new draft is created and no state is reset.
+      const cur = draftIdRef.current
+      setTasks((ts) => ts.map((t) => (t.id === cur ? { ...t, x, y } : t)))
+      return
+    }
     const id = 'd' + Date.now()
+    draftIdRef.current = id
     const no = String(tasks.length + 1).padStart(2, '0')
     setTasks((ts) => [
       ...ts,
@@ -318,6 +338,7 @@ export function MobileApp() {
     if (!draftId) return
     setTasks((ts) => ts.filter((t) => t.id !== draftId))
     setDraftId(null)
+    draftIdRef.current = null
     setPrompt('')
     setMode('orch')
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -465,6 +486,7 @@ export function MobileApp() {
       const oldId = draftId
       const apiTask = await shipReal(trimmed)
       setDraftId(null)
+      draftIdRef.current = null
       setPrompt('')
       if (apiTask) {
         setTasks((ts) => {
@@ -475,6 +497,7 @@ export function MobileApp() {
       } else {
         // Keep the draft so the user can retry.
         setDraftId(oldId)
+        draftIdRef.current = oldId
         setPrompt(trimmed)
       }
       return
@@ -509,12 +532,6 @@ export function MobileApp() {
     setPartyOpen(false)
     setFeedOpen(true)
   }
-
-  const onChangeDraftTitle = (v: string) => {
-    setPrompt(v)
-    setTasks((ts) => ts.map((t) => (t.id === draftId ? { ...t, title: v } : t)))
-  }
-  const onShipDraft = () => void handleSend({ mode, text: prompt })
 
   // ── Auth gate ───────────────────────────────────────────────────
   useEffect(() => {
@@ -588,8 +605,6 @@ export function MobileApp() {
           onRenameBundle={renameBundle}
           onAddDraft={addDraft}
           draftId={draftId}
-          onChangeDraftTitle={onChangeDraftTitle}
-          onShipDraft={onShipDraft}
           onLinkTasks={linkTasks}
           formatTick={formatTick}
           onSelectTask={onSelectTask}

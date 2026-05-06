@@ -23,9 +23,6 @@ interface CrTaskLiveCardProps {
   onClick?: () => void
   style?: CSSProperties
   dragging?: boolean
-  onChangeTitle?: (v: string) => void
-  autoFocus?: boolean
-  onShip?: () => void
 }
 
 export function CrTaskLiveCard({
@@ -36,9 +33,6 @@ export function CrTaskLiveCard({
   onClick,
   style,
   dragging,
-  onChangeTitle,
-  autoFocus,
-  onShip,
 }: CrTaskLiveCardProps) {
   const isDraft = t.status === 'draft'
   const isOrch = t.status === 'orch'
@@ -46,21 +40,6 @@ export function CrTaskLiveCard({
   const isCooked = t.status === 'cooked'
   const isOpen = t.status === 'open' && !isBlocked
   const isWorking = t.status === 'working' && !isBlocked && !isCooked
-  const editable = isDraft && !!onChangeTitle
-  const inputRef = useRef<HTMLTextAreaElement | null>(null)
-
-  useEffect(() => {
-    if (editable && autoFocus && inputRef.current) {
-      inputRef.current.focus()
-      const el = inputRef.current
-      const len = (el.value || '').length
-      try {
-        el.setSelectionRange(len, len)
-      } catch {
-        // ignore
-      }
-    }
-  }, [editable, autoFocus, t.id])
 
   const st = CR_STATUS[isCooked ? 'cooked' : isBlocked ? 'blocked' : t.status]
 
@@ -279,52 +258,19 @@ export function CrTaskLiveCard({
           {st.label}
         </CrChip>
       </div>
-      {editable ? (
-        <textarea
-          ref={inputRef}
-          value={t.title || ''}
-          placeholder="Describe this quest…"
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-          onChange={(e) => onChangeTitle?.(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              onShip?.()
-            }
-          }}
-          rows={2}
-          style={{
-            width: '100%',
-            resize: 'none',
-            border: 'none',
-            outline: 'none',
-            background: 'transparent',
-            padding: 0,
-            margin: 0,
-            fontFamily: 'Inter,sans-serif',
-            fontSize: compact ? 13 : 14,
-            fontWeight: 600,
-            color: 'var(--ink)',
-            lineHeight: 1.3,
-            minHeight: compact ? 32 : 36,
-          }}
-        />
-      ) : (
-        <div
-          style={{
-            fontFamily: 'Inter,sans-serif',
-            fontSize: compact ? 13 : 14,
-            fontWeight: 600,
-            color: isDraft && !t.title ? 'var(--muted)' : 'var(--ink)',
-            fontStyle: isDraft && !t.title ? 'italic' : 'normal',
-            lineHeight: 1.3,
-            minHeight: compact ? 16 : 18,
-          }}
-        >
-          {t.title || (isDraft ? 'Describe this quest…' : '')}
-        </div>
-      )}
+      <div
+        style={{
+          fontFamily: 'Inter,sans-serif',
+          fontSize: compact ? 13 : 14,
+          fontWeight: 600,
+          color: isDraft && !t.title ? 'var(--muted)' : 'var(--ink)',
+          fontStyle: isDraft && !t.title ? 'italic' : 'normal',
+          lineHeight: 1.3,
+          minHeight: compact ? 16 : 18,
+        }}
+      >
+        {t.title || (isDraft ? 'New quest' : '')}
+      </div>
       <div
         style={{
           display: 'flex',
@@ -470,8 +416,6 @@ interface CrTaskCanvasProps {
   onSelect?: (t: Task) => void
   onDoubleClickCanvas?: (point: { x: number; y: number }) => void
   draftId?: string | null
-  onChangeDraftTitle?: (v: string) => void
-  onShipDraft?: () => void
   onLinkTasks?: (srcId: string, tgtId: string) => void
   formatTick?: number
   hitlFocusTaskId?: string | null
@@ -491,8 +435,6 @@ export function CrTaskCanvas({
   onSelect,
   onDoubleClickCanvas,
   draftId,
-  onChangeDraftTitle,
-  onShipDraft,
   onLinkTasks,
   formatTick = 0,
   hitlFocusTaskId,
@@ -973,9 +915,6 @@ export function CrTaskCanvas({
                 highlight={t.id === draftId}
                 hitlFocus={t.id === hitlFocusTaskId}
                 onClick={() => onSelect?.(t)}
-                onChangeTitle={t.id === draftId ? onChangeDraftTitle : undefined}
-                onShip={t.id === draftId ? onShipDraft : undefined}
-                autoFocus={t.id === draftId}
               />
             </div>
           )
@@ -1286,8 +1225,6 @@ interface CrMissionBoardProps {
   onSelectTask?: (t: Task) => void
   onAddDraft?: (point: { x: number; y: number }) => void
   draftId?: string | null
-  onChangeDraftTitle?: (v: string) => void
-  onShipDraft?: () => void
   onLinkTasks?: (srcId: string, tgtId: string) => void
   onOpenHitl?: (h: HitlItem) => void
   formatTick?: number
@@ -1306,8 +1243,6 @@ export function CrMissionBoard({
   onSelectTask,
   onAddDraft,
   draftId,
-  onChangeDraftTitle,
-  onShipDraft,
   onLinkTasks,
   onOpenHitl,
   formatTick,
@@ -1358,8 +1293,6 @@ export function CrMissionBoard({
           onSelect={onSelectTask}
           onDoubleClickCanvas={onAddDraft}
           draftId={draftId}
-          onChangeDraftTitle={onChangeDraftTitle}
-          onShipDraft={onShipDraft}
           onLinkTasks={onLinkTasks}
           formatTick={formatTick}
           hitlFocusTaskId={focusedTaskId}

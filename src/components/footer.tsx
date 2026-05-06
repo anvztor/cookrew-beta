@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -63,6 +64,11 @@ export function CrPromptShipBox({
   const [menu, setMenu] = useState<MenuKind>(null)
   const taRef = useRef<HTMLTextAreaElement | null>(null)
   const isMobile = variant === 'mobile'
+
+  useEffect(() => {
+    if (!draftActive) return
+    taRef.current?.focus()
+  }, [draftActive])
 
   const placeholder = draftActive
     ? 'describe this quest · ⏎ to ship · binds to dotted card above'
