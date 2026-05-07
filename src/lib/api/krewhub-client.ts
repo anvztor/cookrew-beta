@@ -90,6 +90,10 @@ export interface BundleSummary {
   created_at: string
   owner_account_id: string | null
   default_agent_runtime_id: string | null
+  /** Bundle-level e2b sandbox provisioned at create time. Null when
+   *  the e2b orchestrator was unreachable; the SPA should surface a
+   *  warning so the operator knows tasks will fail to run. */
+  sandbox_id?: string | null
 }
 
 export interface BundleDetail {
@@ -210,12 +214,23 @@ export async function listBundles(recipeId: string): Promise<BundleSummary[]> {
 export async function createBundle(
   recipeId: string,
   prompt: string,
+  opts: { autoplan?: boolean } = {},
 ): Promise<BundleSummary> {
+  // autoplan defaults to false on the backend AND here. The SPA's
+  // "+ NEW" button creates an inert bundle on purpose — operator
+  // wants a blank board to drop tasks onto, not an LLM-generated
+  // graph. Only orchestrator-mode flows that explicitly want
+  // PlannerDispatchController to fire pass autoplan: true.
   const r = await fetch(`${KREWHUB}/api/v1/recipes/${recipeId}/bundles`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, requested_by: 'cookrew-beta', tasks: [] }),
+    body: JSON.stringify({
+      prompt,
+      requested_by: 'cookrew-beta',
+      tasks: [],
+      autoplan: !!opts.autoplan,
+    }),
   })
   if (!r.ok) {
     const body = await r.json().catch(() => ({}))

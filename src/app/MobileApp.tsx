@@ -334,6 +334,11 @@ export function MobileApp() {
   }
 
   // ── 4. Bundle create (the "+ NEW" tab) — real POST ──────────────
+  // Empty prompt + autoplan: false → backend skips planner dispatch.
+  // The board renders blank; operator double-clicks to drop drafts,
+  // then ships them as ordinary tasks. Orchestrator mode (the future
+  // "compose a multi-step bundle from prompt" flow) is the only path
+  // that should opt back into autoplan.
   const addBundle = async () => {
     if (state.status !== 'authed') return
     if (!recipeId) {
@@ -341,12 +346,28 @@ export function MobileApp() {
       return
     }
     try {
-      const b = await createBundle(recipeId, 'New mission')
-      setBundles((bs) => [...bs, { id: b.id, name: b.prompt ?? b.id, tasks: [] }])
+      const b = await createBundle(recipeId, '', { autoplan: false })
+      setBundles((bs) => [
+        ...bs,
+        // Stable display name — the prompt is intentionally empty so
+        // we render the bundle id slice instead of "New mission".
+        { id: b.id, name: b.id.slice(0, 12).toUpperCase(), tasks: [] },
+      ])
       setActiveBundleId(b.id)
       setDraftId(null)
       draftIdRef.current = null
       setPrompt('')
+      // Backend provisions a bundle-scoped e2b sandbox synchronously at
+      // create time. If sandbox_id came back null, e2b was unreachable
+      // — every task in this bundle will hit "no sandbox" on ship.
+      // Surface that loudly so the operator can retry instead of
+      // discovering it task-by-task.
+      if (!b.sandbox_id) {
+        showToast(
+          'Sandbox not provisioned — tasks will fail. Refresh and retry once e2b is reachable.',
+          4200,
+        )
+      }
       // Real bundle.created event will appear in the feed via SSE.
     } catch (e) {
       const err = e as { message?: string }
@@ -527,7 +548,12 @@ export function MobileApp() {
           err.message === 'Bundle not found')
       if (recoverable && recipeId) {
         try {
-          const fresh = await createBundle(recipeId, text.slice(0, 64))
+          // Recovery bundle: just a fresh container for the user's
+          // typed task. No autoplan — they're shipping a one-shot
+          // task, not asking the planner for a graph.
+          const fresh = await createBundle(recipeId, text.slice(0, 64), {
+            autoplan: false,
+          })
           setBundles((bs) => [
             { id: fresh.id, name: fresh.prompt ?? fresh.id, tasks: [] },
             ...bs.filter((b) => b.id !== fresh.id),
