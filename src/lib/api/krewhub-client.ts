@@ -155,7 +155,10 @@ export async function getCookbookDetail(cookbookId: string): Promise<{
  * Strategy:
  *   1. localStorage cache (krewhub_active_recipe_id) — survives reloads.
  *   2. First owned cookbook → first recipe inside it.
- *   3. null when the user has no cookbook/recipe yet.
+ *   3. POST /api/v1/me/init-workspace — server bootstraps a default
+ *      cookbook + recipe for first-time web users who haven't run
+ *      `krewcli login` on their machine yet. Idempotent.
+ *   4. null when even init failed (network blip; UI surfaces a toast).
  */
 export async function resolveActiveRecipeId(
   accountId: string,
@@ -163,12 +166,36 @@ export async function resolveActiveRecipeId(
   const cached = localStorage.getItem('krewhub_active_recipe_id')
   if (cached) return cached
   const cookbooks = await listCookbooks(accountId)
-  if (cookbooks.length === 0) return null
-  const detail = await getCookbookDetail(cookbooks[0].id)
-  const recipe = detail.recipes[0]
-  if (!recipe) return null
-  localStorage.setItem('krewhub_active_recipe_id', recipe.id)
-  return recipe.id
+  if (cookbooks.length > 0) {
+    const detail = await getCookbookDetail(cookbooks[0].id)
+    const recipe = detail.recipes[0]
+    if (recipe) {
+      localStorage.setItem('krewhub_active_recipe_id', recipe.id)
+      return recipe.id
+    }
+  }
+  // No cookbook yet → server-side bootstrap.
+  const init = await initWorkspace().catch(() => null)
+  if (init) {
+    localStorage.setItem('krewhub_active_recipe_id', init.recipe.id)
+    return init.recipe.id
+  }
+  return null
+}
+
+export interface InitWorkspaceResult {
+  cookbook: Cookbook
+  recipe: Recipe
+}
+
+export async function initWorkspace(): Promise<InitWorkspaceResult> {
+  const r = await fetch(`${KREWHUB}/api/v1/me/init-workspace`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+  })
+  if (!r.ok) throw makeError(`init_workspace_${r.status}`, undefined, r.status)
+  return r.json()
 }
 
 export async function listBundles(recipeId: string): Promise<BundleSummary[]> {

@@ -218,17 +218,25 @@ export function MobileApp() {
     void resolveActiveRecipeId(state.account.account_id)
       .then((id) => {
         if (cancelled) return
-        if (id) setRecipeId(id)
-        else if (FALLBACK_RECIPE_ID) setRecipeId(FALLBACK_RECIPE_ID)
-        else
+        if (id) {
+          setRecipeId(id)
+        } else if (FALLBACK_RECIPE_ID) {
+          setRecipeId(FALLBACK_RECIPE_ID)
+        } else {
+          // resolveActiveRecipeId already tried POST /me/init-workspace;
+          // if we still have nothing the network is genuinely down or
+          // krewhub is offline. Surface a useful hint instead of the
+          // legacy "still loading" stall.
           showToast(
-            'No cookbook yet — run `krewcli login` on your machine to create one.',
+            'Could not reach hub.cookrew.dev — refresh once it is back.',
             4200,
           )
+        }
       })
       .catch((e) => {
         const err = e as { message?: string }
         console.warn('recipe discovery failed:', err.message)
+        showToast(`recipe discovery failed: ${err.message ?? 'unknown'}`, 4200)
       })
     return () => {
       cancelled = true
