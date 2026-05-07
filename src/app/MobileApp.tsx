@@ -7,6 +7,11 @@ import { CrMissionBoard } from '../components/mission-board'
 import { CrPartySidebar } from '../components/party-sidebar'
 import { HireAgentRuntimeModal } from '../components/auth-view/hire-agent-runtime-modal'
 import { CrHITLPopout } from '../components/hitl-popout'
+import { CrInvocationElicitPopout } from '../components/invocation-elicit-popout'
+import {
+  usePendingElicits,
+  type PendingElicit,
+} from '../lib/api/invocation-stream'
 import { redirectToLogin } from '../lib/auth/auth-client'
 import { useAuth } from '../lib/auth/useAuth'
 import {
@@ -17,6 +22,7 @@ import {
   listRuntimes,
   postHitlAnswer,
   resolveActiveRecipeId,
+  submitInvocationResult,
   type Runtime,
   type Task as ApiTask,
 } from '../lib/api/krewhub-client'
@@ -201,6 +207,9 @@ export function MobileApp() {
   const [toast, setToast] = useState<string | null>(null)
   const [formatTick] = useState(0)
   const [hitlOpen, setHitlOpen] = useState<HitlItem | null>(null)
+  const [elicitOpen, setElicitOpen] = useState<PendingElicit | null>(null)
+  // Auto-surface invocation-style HITL events from the recipe stream.
+  const pendingElicits = usePendingElicits(recipeId || undefined)
   const [shipError, setShipError] = useState<string | null>(null)
   // When the user clicks an assigned task on the board we pop the
   // EventFeed open and pre-select that agent's tab + task focus.
@@ -233,6 +242,16 @@ export function MobileApp() {
     if (state.status !== 'authed') return
     void refreshRoster(state.account)
   }, [state, refreshRoster])
+
+  // Auto-surface the next pending invocation-style elicit. If an
+  // operator already has one open we leave it; otherwise we pop the
+  // newest one. The popout closes on submit/decline → setElicitOpen(null)
+  // → next pending takes its place on the next render.
+  useEffect(() => {
+    if (elicitOpen) return
+    if (pendingElicits.length === 0) return
+    setElicitOpen(pendingElicits[pendingElicits.length - 1])
+  }, [pendingElicits, elicitOpen])
 
   // ── 1.4 Post-pair landing — surface the freshly hired agent ─────
   // /auth/login confirm card → /agents/pair → redirects here with
@@ -856,6 +875,31 @@ export function MobileApp() {
                 const err = e as { message?: string; status?: number }
                 showToast(
                   `HITL submit failed: ${err.message ?? err.status}`,
+                  3000,
+                )
+              })
+          }}
+        />
+      )}
+
+      {/* Invocation Contract slice 5 — schema-driven elicit popout for
+          new-style HITL invocations spawned by `delegate(to="human", ...)`.
+          Auto-opens on first pending elicit; closes on submit/decline. */}
+      {elicitOpen && (
+        <CrInvocationElicitPopout
+          item={elicitOpen}
+          onClose={() => setElicitOpen(null)}
+          onSubmit={(envelope) => {
+            const invocationId = elicitOpen.invocationId
+            setElicitOpen(null)
+            submitInvocationResult(invocationId, envelope)
+              .then(() => {
+                showToast('Sent — agent resuming', 1800)
+              })
+              .catch((e) => {
+                const err = e as { message?: string; status?: number }
+                showToast(
+                  `Submit failed: ${err.message ?? err.status}`,
                   3000,
                 )
               })

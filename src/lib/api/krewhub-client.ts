@@ -230,6 +230,105 @@ export async function postHitlAnswer(taskId: string, answer: string): Promise<vo
   }
 }
 
+// ---------------------------------------------------------------------------
+// Invocation Contract — slice 5 frontend wiring
+// ---------------------------------------------------------------------------
+
+export type InvocationAction = 'accept' | 'decline' | 'cancel' | 'error'
+
+export interface ResultEnvelope {
+  action: InvocationAction
+  content?: string | Record<string, unknown> | null
+  reason?: string | null
+}
+
+export interface InvocationEvent {
+  tape_id: string
+  id: number
+  parent_id: number | null
+  fork_id: string | null
+  actor_type: 'brain' | 'sandbox' | 'human' | 'system'
+  actor_id: string
+  kind: string
+  body: string
+  payload: Record<string, unknown>
+  ts: string
+}
+
+export interface InvocationRecord {
+  id: string
+  target_type: string
+  target_id: string | null
+  input: string | Record<string, unknown>
+  schema: Record<string, unknown> | null
+  deadline_s: number
+  label: string | null
+  parent_tape_id: string | null
+  parent_fork_point: number | null
+  tape_id: string
+  status: 'pending' | 'running' | 'completed' | 'cancelled' | 'errored'
+  result: ResultEnvelope | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  created_by: string
+}
+
+export async function getInvocation(invocationId: string): Promise<InvocationRecord> {
+  const r = await fetch(`${KREWHUB}/api/v1/invocations/${invocationId}`, {
+    credentials: 'include',
+  })
+  if (!r.ok) throw makeError(`invocation_${r.status}`, undefined, r.status)
+  const body = await r.json()
+  // The route returns either {invocation: {...}, status, latest_event_id} or
+  // a flatter shape on older deployments. Normalize.
+  return (body.invocation ?? body) as InvocationRecord
+}
+
+export async function listInvocationEvents(
+  invocationId: string,
+  opts: { after?: number; limit?: number } = {},
+): Promise<InvocationEvent[]> {
+  const params = new URLSearchParams()
+  if (typeof opts.after === 'number') params.set('after', String(opts.after))
+  if (typeof opts.limit === 'number') params.set('limit', String(opts.limit))
+  const qs = params.toString()
+  const url = `${KREWHUB}/api/v1/invocations/${invocationId}/events${qs ? `?${qs}` : ''}`
+  const r = await fetch(url, { credentials: 'include' })
+  if (!r.ok) throw makeError(`events_${r.status}`, undefined, r.status)
+  const body = (await r.json()) as { events?: InvocationEvent[] }
+  return body.events ?? []
+}
+
+export async function submitInvocationResult(
+  invocationId: string,
+  envelope: ResultEnvelope,
+): Promise<void> {
+  const r = await fetch(`${KREWHUB}/api/v1/invocations/${invocationId}/result`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(envelope),
+  })
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}))
+    const detail = typeof body?.detail === 'string'
+      ? body.detail
+      : `invocation_result_${r.status}`
+    throw makeError(detail, undefined, r.status)
+  }
+}
+
+export async function cancelInvocation(invocationId: string): Promise<void> {
+  const r = await fetch(`${KREWHUB}/api/v1/invocations/${invocationId}/cancel`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!r.ok) {
+    throw makeError(`cancel_${r.status}`, undefined, r.status)
+  }
+}
+
 export async function listBundles(recipeId: string): Promise<BundleSummary[]> {
   const r = await fetch(`${KREWHUB}/api/v1/recipes/${recipeId}/bundles`, {
     credentials: 'include',
