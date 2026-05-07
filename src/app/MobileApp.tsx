@@ -245,12 +245,12 @@ export function MobileApp() {
 
   // Auto-surface the next pending invocation-style elicit. If an
   // operator already has one open we leave it; otherwise we pop the
-  // newest one. The popout closes on submit/decline → setElicitOpen(null)
-  // → next pending takes its place on the next render.
+  // freshest one. `usePendingElicits` filters out expired and sorts
+  // newest-first, so [0] is the most recently raised live elicit.
   useEffect(() => {
     if (elicitOpen) return
     if (pendingElicits.length === 0) return
-    setElicitOpen(pendingElicits[pendingElicits.length - 1])
+    setElicitOpen(pendingElicits[0])
   }, [pendingElicits, elicitOpen])
 
   // ── 1.4 Post-pair landing — surface the freshly hired agent ─────

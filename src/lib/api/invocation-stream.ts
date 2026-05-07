@@ -81,11 +81,24 @@ export function useInvocationStream(
  *
  * Backed by the existing /api/v1/watch endpoint with
  * resource_type=invocation&recipe_id=<recipe>.
+ *
+ * Stale-elicit filter: invocations whose `deadline_ts` is already in
+ * the past are dropped from the live list and re-checked every 15s.
+ * Without this, expired elicits from prior sessions block fresh ones —
+ * the operator submits to a deadline_exceeded invocation while the new
+ * one times out behind it.
  */
 export function usePendingElicits(
   recipeId: string | undefined,
 ): PendingElicit[] {
   const [pending, setPending] = useState<Map<string, PendingElicit>>(new Map())
+  // Sweep tick — bumps every 15s so React re-renders the filtered list
+  // and live-evicts items whose deadline_ts has just passed.
+  const [, setSweepTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setSweepTick((n) => n + 1), 15_000)
+    return () => clearInterval(t)
+  }, [])
 
   useEffect(() => {
     setPending(new Map())
@@ -175,7 +188,25 @@ export function usePendingElicits(
     }
   }, [recipeId])
 
-  return Array.from(pending.values())
+  // Filter out invocations whose deadline_ts has passed. We can't
+  // submit to an expired invocation anyway (the krewhub side will
+  // already have closed it with action=cancel reason=deadline_exceeded
+  // by then), and surfacing them blocks operators from reaching the
+  // freshest live elicit behind them.
+  const now = Date.now()
+  const live: PendingElicit[] = []
+  for (const item of pending.values()) {
+    if (!item.deadlineTs) {
+      live.push(item)
+      continue
+    }
+    const t = Date.parse(item.deadlineTs)
+    if (Number.isFinite(t) && t > now) live.push(item)
+  }
+  // Surface most-recent first so freshly-raised elicits pop ahead of
+  // older live ones.
+  live.sort((a, b) => Date.parse(b.raisedAt) - Date.parse(a.raisedAt))
+  return live
 }
 
 
