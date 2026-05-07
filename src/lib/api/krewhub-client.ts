@@ -21,6 +21,14 @@ export interface Task {
   assigned_agent_id?: string | null
   /** Set once an agent actually claims the task. */
   claimed_by_agent_id?: string | null
+  /** When status='blocked', the reason the agent surfaced (e.g.
+   *  "execution_timeout", "Gemini CLI timed out"). The SPA shows
+   *  this as the agent's question in the HITL popout. */
+  blocked_reason?: string | null
+  /** ISO-8601 timestamp the task was claimed. Used to compute the
+   *  "pending Xm" stamp on HITL chips. */
+  claimed_at?: string | null
+  completed_at?: string | null
 }
 
 export interface Sandbox {
@@ -200,6 +208,26 @@ export async function initWorkspace(): Promise<InitWorkspaceResult> {
   })
   if (!r.ok) throw makeError(`init_workspace_${r.status}`, undefined, r.status)
   return r.json()
+}
+
+/**
+ * Submit a human-in-the-loop answer to a blocked task. The backend
+ * appends the answer to the task description, drops a HITL prompt
+ * event onto the recipe stream, and resets the task from
+ * `blocked` → `open` so TaskDispatchController re-dispatches.
+ */
+export async function postHitlAnswer(taskId: string, answer: string): Promise<void> {
+  const r = await fetch(`${KREWHUB}/api/v1/tasks/${taskId}/hitl/answer`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer }),
+  })
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}))
+    const detail = typeof body.detail === 'string' ? body.detail : `hitl_${r.status}`
+    throw makeError(detail, undefined, r.status)
+  }
 }
 
 export async function listBundles(recipeId: string): Promise<BundleSummary[]> {

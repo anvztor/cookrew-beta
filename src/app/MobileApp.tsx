@@ -15,6 +15,7 @@ import {
   getBundle,
   listBundles,
   listRuntimes,
+  postHitlAnswer,
   resolveActiveRecipeId,
   type Runtime,
   type Task as ApiTask,
@@ -69,6 +70,37 @@ function mapStatus(backendStatus: string): TaskStatus {
   }
 }
 
+/** Humanise an ISO timestamp into a "pending Xm/Xh" stamp for the
+ *  HITL chip. Falls back to "—" when the input is missing. */
+function _pendingFor(claimedAtIso: string | null | undefined): string {
+  if (!claimedAtIso) return '—'
+  const claimedMs = new Date(claimedAtIso).getTime()
+  if (!Number.isFinite(claimedMs)) return '—'
+  const deltaSec = Math.max(0, Math.floor((Date.now() - claimedMs) / 1000))
+  if (deltaSec < 60) return deltaSec + 's'
+  if (deltaSec < 3600) return Math.floor(deltaSec / 60) + 'm'
+  if (deltaSec < 86400) return Math.floor(deltaSec / 3600) + 'h'
+  return Math.floor(deltaSec / 86400) + 'd'
+}
+
+/** Humanise the agent's `blocked_reason` into a question the operator
+ *  can answer. Empty/unknown reasons fall through to a generic prompt. */
+function _humaniseBlockedReason(raw: string | null | undefined): string {
+  const reason = (raw ?? '').trim()
+  if (!reason) return 'The agent stopped without details. How would you like to proceed?'
+  // Common machine codes → friendlier phrasing.
+  if (/timed?\s*out|timeout/i.test(reason)) {
+    return `${reason} — what should I try next? (refine the prompt, retry, or skip)`
+  }
+  if (/permission|denied|forbidden/i.test(reason)) {
+    return `${reason} — how should I proceed past this access check?`
+  }
+  if (/no_paired_agent|paired/i.test(reason)) {
+    return `${reason} — paste an agent code or hire a new one to continue.`
+  }
+  return `${reason} — please advise.`
+}
+
 function backendTaskToUi(t: ApiTask, idx: number): Task {
   const blocked = (t.status ?? '').toLowerCase() === 'blocked'
   // Logical agent identity — what the SSE stream's `actor_id` will
@@ -79,6 +111,14 @@ function backendTaskToUi(t: ApiTask, idx: number): Task {
   const displayAssignee =
     agentId ??
     (t.assigned_runtime_id ? t.assigned_runtime_id.slice(0, 8) : '—')
+  // Every blocked task is, by contract, a HITL item — the agent
+  // gave up and the operator is the only thing that can move it
+  // forward. Surface it through the existing HITLClickbar +
+  // HITLPopout pipeline by tagging hitl='needs_input' and shipping
+  // the blocked_reason as the agent's question.
+  const claimedAtMs = t.claimed_at
+    ? new Date(t.claimed_at).getTime()
+    : undefined
   return {
     id: t.id,
     no: String(idx + 1).padStart(2, '0'),
@@ -93,6 +133,18 @@ function backendTaskToUi(t: ApiTask, idx: number): Task {
     // Initial grid placement; CrTaskCanvas FORMAT button can re-layout.
     x: 24 + (idx % 4) * 240,
     y: 24 + Math.floor(idx / 4) * 156,
+    // HITL surface — only populated when the backend says blocked.
+    ...(blocked
+      ? {
+          hitl: 'needs_input' as const,
+          hitlPending: _pendingFor(t.claimed_at),
+          hitlOverdue: claimedAtMs
+            ? Date.now() - claimedAtMs > 5 * 60 * 1000
+            : false,
+          hitlQuestion: _humaniseBlockedReason(t.blocked_reason),
+          hitlAt: claimedAtMs,
+        }
+      : {}),
   }
 }
 
@@ -785,11 +837,28 @@ export function MobileApp() {
           item={hitlOpen}
           task={tasks.find((t) => t.id === hitlOpen.taskId)}
           onClose={() => setHitlOpen(null)}
-          onSubmit={() => {
-            // No mock answer pipeline — just close. A future change can
-            // POST the answer to a krewhub HITL endpoint.
+          onSubmit={(payload) => {
+            if (payload.kind !== 'answer') {
+              setHitlOpen(null)
+              return
+            }
+            const taskId = hitlOpen.taskId
+            // Optimistic close so the operator gets immediate feedback.
             setHitlOpen(null)
-            showToast('HITL answer flow not yet wired to backend', 2400)
+            postHitlAnswer(taskId, payload.text)
+              .then(() => {
+                showToast('Sent — task back to OPEN', 1800)
+                // Force-refresh bundles so the SPA reflects the
+                // new status without waiting for the next 6s tick.
+                void refreshBundles()
+              })
+              .catch((e) => {
+                const err = e as { message?: string; status?: number }
+                showToast(
+                  `HITL submit failed: ${err.message ?? err.status}`,
+                  3000,
+                )
+              })
           }}
         />
       )}
