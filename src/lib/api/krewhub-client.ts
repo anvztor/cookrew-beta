@@ -107,6 +107,70 @@ export async function getBundle(bundleId: string): Promise<BundleDetail | null> 
   return r.json()
 }
 
+// ── Cookbooks / recipes ────────────────────────────────────────
+// Each user gets per-account cookbooks via `krewcli login`'s
+// auto-bootstrap (creates "my-cookbook" + "my-recipe" if absent).
+// The SPA discovers them on load instead of relying on a hardcoded
+// recipe ID — that approach broke for any user who didn't happen to
+// own the build-time-baked recipe.
+
+export interface Cookbook {
+  id: string
+  name: string
+  owner_id: string | null
+  created_at: string
+}
+
+export interface Recipe {
+  id: string
+  name: string
+  cookbook_id: string
+  created_by: string
+  created_at: string
+}
+
+export async function listCookbooks(ownerId?: string): Promise<Cookbook[]> {
+  const url = new URL(`${KREWHUB}/api/v1/cookbooks`)
+  if (ownerId) url.searchParams.set('owner_id', ownerId)
+  const r = await fetch(url.toString(), { credentials: 'include' })
+  if (!r.ok) throw makeError(`cookbooks_${r.status}`, undefined, r.status)
+  const body = (await r.json()) as { cookbooks?: Cookbook[] }
+  return body.cookbooks ?? []
+}
+
+export async function getCookbookDetail(cookbookId: string): Promise<{
+  cookbook: Cookbook
+  recipes: Recipe[]
+}> {
+  const r = await fetch(`${KREWHUB}/api/v1/cookbooks/${cookbookId}`, {
+    credentials: 'include',
+  })
+  if (!r.ok) throw makeError(`cookbook_${r.status}`, undefined, r.status)
+  return r.json()
+}
+
+/**
+ * Resolve the current user's "active" recipe.
+ *
+ * Strategy:
+ *   1. localStorage cache (krewhub_active_recipe_id) — survives reloads.
+ *   2. First owned cookbook → first recipe inside it.
+ *   3. null when the user has no cookbook/recipe yet.
+ */
+export async function resolveActiveRecipeId(
+  accountId: string,
+): Promise<string | null> {
+  const cached = localStorage.getItem('krewhub_active_recipe_id')
+  if (cached) return cached
+  const cookbooks = await listCookbooks(accountId)
+  if (cookbooks.length === 0) return null
+  const detail = await getCookbookDetail(cookbooks[0].id)
+  const recipe = detail.recipes[0]
+  if (!recipe) return null
+  localStorage.setItem('krewhub_active_recipe_id', recipe.id)
+  return recipe.id
+}
+
 export async function listBundles(recipeId: string): Promise<BundleSummary[]> {
   const r = await fetch(`${KREWHUB}/api/v1/recipes/${recipeId}/bundles`, {
     credentials: 'include',

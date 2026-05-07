@@ -15,6 +15,7 @@ import {
   getBundle,
   listBundles,
   listRuntimes,
+  resolveActiveRecipeId,
   type Runtime,
   type Task as ApiTask,
 } from '../lib/api/krewhub-client'
@@ -31,8 +32,13 @@ import { deriveHitl, type HitlItem, type Task, type TaskStatus } from '../data/t
 import type { Bundle } from '../components/bundle-tabs'
 import type { Account } from '../lib/auth/auth-client'
 
-const RECIPE_ID =
-  (import.meta.env.VITE_KREWHUB_RECIPE_ID as string | undefined) ?? 'rec_fefc7a34'
+// Build-time fallback for local dev when no signed-in account is
+// available. In prod we resolve the operator's actual recipe via
+// resolveActiveRecipeId(account_id) on load — krewcli's auto-bootstrap
+// creates a per-user "my-cookbook" / "my-recipe" with a generated ID
+// that almost never matches a hardcoded constant.
+const FALLBACK_RECIPE_ID =
+  (import.meta.env.VITE_KREWHUB_RECIPE_ID as string | undefined) ?? ''
 
 interface DesignBundle extends Bundle {
   /** Same as id — kept so the existing BundleTabs typing stays unchanged. */
@@ -117,6 +123,10 @@ export function MobileApp() {
 
   const [bundles, setBundles] = useState<DesignBundle[]>([])
   const [activeBundleId, setActiveBundleId] = useState<string>('')
+  // Active recipe — resolved per-user on login, persisted in
+  // localStorage. Empty string while loading; bundle/listing calls
+  // wait until it's set.
+  const [recipeId, setRecipeId] = useState<string>(FALLBACK_RECIPE_ID)
   const activeBundle = bundles.find((b) => b.id === activeBundleId)
   const tasks = activeBundle?.tasks ?? []
 
@@ -172,6 +182,59 @@ export function MobileApp() {
     void refreshRoster(state.account)
   }, [state, refreshRoster])
 
+  // ── 1.4 Post-pair landing — surface the freshly hired agent ─────
+  // /auth/login confirm card → /agents/pair → redirects here with
+  // ?paired=<runtime_id>. Kick the roster + bundles refresh
+  // immediately so the new agent shows up without polling delay,
+  // then strip the query param so a refresh later doesn't re-toast.
+  useEffect(() => {
+    if (state.status !== 'authed') return
+    const url = new URL(window.location.href)
+    const pairedId = url.searchParams.get('paired')
+    if (!pairedId) return
+    showToast('Agent online ✓', 2400)
+    void refreshRoster(state.account)
+    url.searchParams.delete('paired')
+    window.history.replaceState({}, '', url.toString())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.status])
+
+  // ── 1.5 Recipe discovery ────────────────────────────────────────
+  // Each user gets their own cookbook + recipe via krewcli's
+  // auto-bootstrap (`my-cookbook` / `my-recipe`). The IDs are
+  // generated, not predictable, so the SPA must resolve them per
+  // signed-in account. localStorage caches the result for snappy
+  // reloads; ?recipe=<id> on the URL overrides the cache (used by
+  // operators who own multiple recipes).
+  useEffect(() => {
+    if (state.status !== 'authed') return
+    const overrideFromUrl = new URLSearchParams(window.location.search).get('recipe')
+    if (overrideFromUrl) {
+      localStorage.setItem('krewhub_active_recipe_id', overrideFromUrl)
+      setRecipeId(overrideFromUrl)
+      return
+    }
+    let cancelled = false
+    void resolveActiveRecipeId(state.account.account_id)
+      .then((id) => {
+        if (cancelled) return
+        if (id) setRecipeId(id)
+        else if (FALLBACK_RECIPE_ID) setRecipeId(FALLBACK_RECIPE_ID)
+        else
+          showToast(
+            'No cookbook yet — run `krewcli login` on your machine to create one.',
+            4200,
+          )
+      })
+      .catch((e) => {
+        const err = e as { message?: string }
+        console.warn('recipe discovery failed:', err.message)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [state])
+
   // ── 2. Bundle bootstrap: list bundles for the configured recipe ──
   // Real bundles only — no frontend-only `BUN_4A2C` placeholder.
   // Filters to bundles the caller actually owns (legacy bundles with
@@ -181,9 +244,10 @@ export function MobileApp() {
   // default active tab is one we just created.
   const refreshBundles = useCallback(async () => {
     if (state.status !== 'authed') return
+    if (!recipeId) return  // Recipe still resolving — wait for it.
     const acc = state.account
     try {
-      const summaries = await listBundles(RECIPE_ID)
+      const summaries = await listBundles(recipeId)
       const owned = summaries.filter(
         (b) =>
           b.owner_account_id === acc.account_id ||
@@ -214,12 +278,13 @@ export function MobileApp() {
       const err = e as { message?: string }
       console.warn('bundle list failed:', err.message)
     }
-  }, [state])
+  }, [state, recipeId])
 
   useEffect(() => {
     if (state.status !== 'authed') return
+    if (!recipeId) return
     void refreshBundles()
-  }, [state.status, refreshBundles])
+  }, [state.status, recipeId, refreshBundles])
 
   // Light polling (every 6s) of the active bundle so completed-status
   // updates from the daemon are visible without per-task SSE wiring.
@@ -263,8 +328,12 @@ export function MobileApp() {
   // ── 4. Bundle create (the "+ NEW" tab) — real POST ──────────────
   const addBundle = async () => {
     if (state.status !== 'authed') return
+    if (!recipeId) {
+      showToast('Recipe still loading — try again in a moment.', 2400)
+      return
+    }
     try {
-      const b = await createBundle(RECIPE_ID, 'New mission')
+      const b = await createBundle(recipeId, 'New mission')
       setBundles((bs) => [...bs, { id: b.id, name: b.prompt ?? b.id, tasks: [] }])
       setActiveBundleId(b.id)
       setDraftId(null)
@@ -448,9 +517,9 @@ export function MobileApp() {
           err.status === 404 ||
           err.message === 'Not your bundle' ||
           err.message === 'Bundle not found')
-      if (recoverable) {
+      if (recoverable && recipeId) {
         try {
-          const fresh = await createBundle(RECIPE_ID, text.slice(0, 64))
+          const fresh = await createBundle(recipeId, text.slice(0, 64))
           setBundles((bs) => [
             { id: fresh.id, name: fresh.prompt ?? fresh.id, tasks: [] },
             ...bs.filter((b) => b.id !== fresh.id),
@@ -655,7 +724,7 @@ export function MobileApp() {
       <div className="cr-drawer right">
         <CrEventFeed
           variant="mobile"
-          recipeId={RECIPE_ID}
+          recipeId={recipeId}
           focusTaskId={focusedTask?.taskId}
           focusAgentId={focusedTask?.agentId}
           onClose={() => {
