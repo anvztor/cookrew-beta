@@ -253,6 +253,22 @@ export function MobileApp() {
     setElicitOpen(pendingElicits[0])
   }, [pendingElicits, elicitOpen])
 
+  // Auto-close the popup if the invocation it's pinned to has reached
+  // a terminal state on the server (server-side deadline expired,
+  // operator-cancelled from elsewhere, or claude's session ended). The
+  // pendingElicits hook removes terminal items; if the currently-open
+  // invocation is no longer in the live list, the popup should close
+  // and the next pending elicit (if any) auto-pop on the next tick.
+  // Without this, operators submit "banana" into a terminal invocation
+  // and get a confusing 409.
+  useEffect(() => {
+    if (!elicitOpen) return
+    const stillLive = pendingElicits.some(
+      (e) => e.invocationId === elicitOpen.invocationId,
+    )
+    if (!stillLive) setElicitOpen(null)
+  }, [pendingElicits, elicitOpen])
+
   // ── 1.4 Post-pair landing — surface the freshly hired agent ─────
   // /auth/login confirm card → /agents/pair → redirects here with
   // ?paired=<runtime_id>. Kick the roster + bundles refresh
