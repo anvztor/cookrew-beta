@@ -32,12 +32,23 @@ interface CrAuthRequiredPopoutProps {
   onResolved?: () => void
 }
 
+const GITHUB_HOSTS = new Set([
+  'api.github.com', 'github.com', 'codeload.github.com',
+])
+
+function isGitHubHost(host: string | null | undefined): boolean {
+  if (!host) return false
+  const h = host.toLowerCase()
+  return GITHUB_HOSTS.has(h) || h.endsWith('.github.com')
+}
+
 export function CrAuthRequiredPopout({
   item, onClose, onResolved,
 }: CrAuthRequiredPopoutProps) {
   const [token, setToken] = useState('')
   const [envVarName, setEnvVarName] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [oauthLaunching, setOauthLaunching] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -59,8 +70,33 @@ export function CrAuthRequiredPopout({
 
   const host = item.host ?? '(unknown host)'
   const reason = item.reason ?? ''
+  const supportsOAuth = isGitHubHost(host)
 
   const canSubmit = token.trim().length > 0 && envVarName.trim().length > 0
+
+  const handleOAuthLaunch = async () => {
+    if (!item) return
+    setOauthLaunching(true)
+    setError(null)
+    try {
+      const r = await fetch(
+        `${KREWHUB}/api/v1/oauth/github/start?invocation_id=${encodeURIComponent(item.invocationId)}`,
+        { credentials: 'include' },
+      )
+      if (!r.ok) {
+        const body = await r.text()
+        throw new Error(`HTTP ${r.status}: ${body.slice(0, 200)}`)
+      }
+      const data = await r.json() as { authorize_url: string }
+      // Open in same window — the OAuth callback redirects back to
+      // cookrew-web after consent, and PendingElicit clears via the
+      // server's submit_result. Popup mode is finickier across browsers.
+      window.location.href = data.authorize_url
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setOauthLaunching(false)
+    }
+  }
 
   const handleSubmit = async () => {
     if (!canSubmit) return
@@ -163,12 +199,49 @@ export function CrAuthRequiredPopout({
             </div>
           )}
           <div className="cr-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
-            The brain hit an authentication failure. Paste a credential for
-            <strong style={{ color: 'var(--ink)' }}> {host} </strong>
-            below — it's encrypted and stored in your account's vault, then
-            injected as a sandbox env var on the next op. The brain never
+            The brain hit an authentication failure. {supportsOAuth
+              ? <>Connect via OAuth (recommended) or paste a token below.</>
+              : <>Paste a credential for <strong style={{ color: 'var(--ink)' }}>{host}</strong> below.</>
+            } It's encrypted, stored in your account's vault, and injected as
+            an env var the next time the brain runs an op. The brain never
             sees it directly.
           </div>
+
+          {supportsOAuth && (
+            <button
+              onClick={handleOAuthLaunch}
+              disabled={oauthLaunching || submitting}
+              className="cr-bevel"
+              style={{
+                padding: '10px 14px',
+                background: '#24292e',
+                color: 'white',
+                fontFamily: 'Silkscreen,monospace',
+                fontSize: 12,
+                cursor: oauthLaunching ? 'wait' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+            >
+              {oauthLaunching ? 'OPENING GITHUB…' : 'CONNECT VIA GITHUB'}
+            </button>
+          )}
+
+          {supportsOAuth && (
+            <div
+              className="cr-mono"
+              style={{
+                fontSize: 9,
+                color: 'var(--muted)',
+                textAlign: 'center',
+                padding: '4px 0',
+              }}
+            >
+              — or paste a token —
+            </div>
+          )}
 
           <label
             className="cr-mono"

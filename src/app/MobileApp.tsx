@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CallbackScreen } from '../components/auth-view/callback-screen'
+import { OAuthResultScreen } from '../components/auth-view/oauth-result-screen'
 import { CrEventFeed } from '../components/event-feed'
 import { CrFooter } from '../components/footer'
 import { CrHeader } from '../components/header'
@@ -735,6 +736,9 @@ export function MobileApp() {
 
   if (window.location.pathname === '/auth/callback') {
     return <CallbackScreen />
+  }
+  if (window.location.pathname === '/oauth-result') {
+    return <OAuthResultScreen />
   }
   if (state.status === 'loading' || state.status === 'anon') {
     return (
