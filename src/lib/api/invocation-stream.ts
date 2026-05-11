@@ -25,6 +25,13 @@ export interface PendingElicit {
   schema: Record<string, unknown> | null
   deadlineTs: string | null
   raisedAt: string
+  // Structured op shape, set when HumanHand received a typed delegate input
+  // like {op: "auth_required", host, env_var_name, reason}. Renderers
+  // discriminate on `op` to show a typed card instead of a generic form.
+  op?: string | null
+  host?: string | null
+  envVarName?: string | null
+  reason?: string | null
 }
 
 
@@ -144,6 +151,13 @@ export function usePendingElicits(
           typeof (obj as Record<string, unknown>).invocation_id === 'string'
             ? ((obj as Record<string, unknown>).invocation_id as string)
             : tapeId
+        // Optional structured op fields (auth_required and friends).
+        const op = typeof payload.op === 'string' ? payload.op : null
+        const host = typeof payload.host === 'string' ? payload.host : null
+        const envVarName =
+          typeof payload.env_var_name === 'string' ? payload.env_var_name : null
+        const reason = typeof payload.reason === 'string' ? payload.reason : null
+
         const item: PendingElicit = {
           invocationId,
           tapeId,
@@ -151,6 +165,10 @@ export function usePendingElicits(
           schema,
           deadlineTs,
           raisedAt: obj.ts ?? new Date().toISOString(),
+          op,
+          host,
+          envVarName,
+          reason,
         }
         setPending((cur) => {
           const next = new Map(cur)

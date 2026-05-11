@@ -8,6 +8,7 @@ import { CrPartySidebar } from '../components/party-sidebar'
 import { HireAgentRuntimeModal } from '../components/auth-view/hire-agent-runtime-modal'
 import { CrHITLPopout } from '../components/hitl-popout'
 import { CrInvocationElicitPopout } from '../components/invocation-elicit-popout'
+import { CrAuthRequiredPopout } from '../components/auth-required-popout'
 import {
   usePendingElicits,
   type PendingElicit,
@@ -900,8 +901,20 @@ export function MobileApp() {
 
       {/* Invocation Contract slice 5 — schema-driven elicit popout for
           new-style HITL invocations spawned by `delegate(to="human", ...)`.
-          Auto-opens on first pending elicit; closes on submit/decline. */}
-      {elicitOpen && (
+          Auto-opens on first pending elicit; closes on submit/decline.
+          Dispatches to CrAuthRequiredPopout when the elicit carries a
+          structured `op: "auth_required"` from the brain (just-in-time
+          credential bootstrap). */}
+      {elicitOpen && elicitOpen.op === 'auth_required' ? (
+        <CrAuthRequiredPopout
+          item={elicitOpen}
+          onClose={() => setElicitOpen(null)}
+          onResolved={() => {
+            setElicitOpen(null)
+            showToast('Credential stored — agent resuming', 1800)
+          }}
+        />
+      ) : elicitOpen && (
         <CrInvocationElicitPopout
           item={elicitOpen}
           onClose={() => setElicitOpen(null)}
