@@ -60,13 +60,29 @@ function summarise(eventName: string, payload: Record<string, unknown>): EventSl
   if (eventName === 'event.added' || eventName === 'event.modified') {
     const type = asString(payload.type) || 'event'
     const actor = asString(payload.actor_id) || 'SYSTEM'
-    const body = asString(payload.body)
     const taskId = asString(payload.task_id) || undefined
-    const head = body || type
+    // Prefer the rich text in the inner payload (full agent_reply text,
+    // tool_result output, thinking content) over the short `body`
+    // summary, which backends pre-truncate to ~120 chars and so cuts
+    // off mid-word in the feed.
+    const inner = (payload.payload as Record<string, unknown> | null | undefined) ?? {}
+    const innerText =
+      asString(inner.text) ||
+      asString(inner.output) ||
+      asString(payload.body) ||
+      type
+    // High cap with explicit ellipsis to catch runaway output without
+    // lopping off useful context. The feed row uses flex: 1 + natural
+    // wrapping, so long messages render across multiple lines cleanly.
+    const MAX_FEED_CHARS = 600
+    const head =
+      innerText.length > MAX_FEED_CHARS
+        ? innerText.slice(0, MAX_FEED_CHARS - 1) + '…'
+        : innerText
     return {
       agent: actor,
       taskId,
-      msg: `${type} · ${head.slice(0, 140)}`,
+      msg: `${type} · ${head}`,
     }
   }
 
