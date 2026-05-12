@@ -324,16 +324,19 @@ export function CrTaskReviewPopout({
           )}
         </div>
 
-        <div
-          style={{
-            padding: '10px 14px',
-            borderTop: `1px solid ${accent}`,
-            display: 'flex',
-            justifyContent: isCooked ? 'space-between' : 'flex-end',
-            gap: 8,
-          }}
-        >
-          {isCooked && (
+        {/* Footer only renders for cooked tasks (SEND BACK + APPROVE).
+            For plain DONE there's nothing to commit, so dismissal goes
+            via the header ESC button or backdrop click. */}
+        {isCooked && (
+          <div
+            style={{
+              padding: '10px 14px',
+              borderTop: `1px solid ${accent}`,
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 8,
+            }}
+          >
             <button
               onClick={handleSendBack}
               disabled={!!actionInFlight}
@@ -349,41 +352,23 @@ export function CrTaskReviewPopout({
             >
               {actionInFlight === 'sendback' ? 'SENDING…' : 'SEND BACK'}
             </button>
-          )}
-          <div style={{ display: 'flex', gap: 8 }}>
             <button
-              onClick={onClose}
+              onClick={handleApprove}
               disabled={!!actionInFlight}
               className="cr-bevel"
               style={{
                 padding: '6px 14px',
-                background: 'var(--cream-hi)',
+                background: accent,
+                color: 'white',
                 fontFamily: 'Silkscreen,monospace',
                 fontSize: 10,
                 cursor: actionInFlight ? 'not-allowed' : 'pointer',
               }}
             >
-              CLOSE
+              {actionInFlight === 'approve' ? 'APPROVING…' : 'APPROVE'}
             </button>
-            {isCooked && (
-              <button
-                onClick={handleApprove}
-                disabled={!!actionInFlight}
-                className="cr-bevel"
-                style={{
-                  padding: '6px 14px',
-                  background: accent,
-                  color: 'white',
-                  fontFamily: 'Silkscreen,monospace',
-                  fontSize: 10,
-                  cursor: actionInFlight ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {actionInFlight === 'approve' ? 'APPROVING…' : 'APPROVE'}
-              </button>
-            )}
           </div>
-        </div>
+        )}
       </div>
     </div>
   )
