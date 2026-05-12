@@ -20,6 +20,7 @@ import { useAuth } from '../lib/auth/useAuth'
 import {
   createBundle,
   createTask,
+  appendTaskFollowup,
   getBundle,
   listBundles,
   listRuntimes,
@@ -964,21 +965,22 @@ export function MobileApp() {
         <CrTaskReviewPopout
           task={reviewTask}
           onClose={() => setReviewTask(null)}
-          onFollowUp={async (_task, prompt) => {
-            if (!activeBundleId) {
-              showToast('No active bundle — cannot send follow-up', 3000)
-              return
-            }
+          onFollowUp={async (task, prompt) => {
             try {
-              const { task: newTask } = await createTask(activeBundleId, prompt)
-              showToast(`Follow-up task created: ${newTask.id}`, 2200)
+              const { status_flipped } = await appendTaskFollowup(task.id, prompt)
+              showToast(
+                status_flipped
+                  ? 'Reply sent — task reopened, agent picking it up'
+                  : 'Reply sent to live task',
+                2200,
+              )
             } catch (e) {
               const err = e as { message?: string; status?: number }
               showToast(
-                `Follow-up failed: ${err.message ?? err.status}`,
+                `Reply failed: ${err.message ?? err.status}`,
                 3500,
               )
-              throw e  // let popout show the error too
+              throw e
             }
           }}
         />

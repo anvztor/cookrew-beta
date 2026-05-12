@@ -82,6 +82,42 @@ export async function createTask(
   return r.json()
 }
 
+/** Append an operator-typed prompt to an existing task's session.
+ *
+ * Used by CrTaskReviewPopout (DONE) and the event-feed Reply composer
+ * (WORKING). Writes a `human_followup`-discriminated event onto the
+ * task's tape. If the task is in a terminal state ('done'), it's
+ * flipped back to 'open' so the daemon re-claims and the brain
+ * resumes with the new prompt in its tape history.
+ *
+ * Crucially: does NOT spawn a new task — keeps the conversation
+ * threaded on the original task.
+ */
+export async function appendTaskFollowup(
+  taskId: string,
+  prompt: string,
+): Promise<{ task: Record<string, unknown>; event_id: string; status_flipped: boolean }> {
+  const r = await fetch(`${KREWHUB}/api/v1/tasks/${taskId}/followup`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  })
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}))
+    const detail = body?.detail
+    const message =
+      typeof detail === 'object' && detail !== null
+        ? (detail as { message?: string }).message ?? `task_followup_${r.status}`
+        : typeof detail === 'string'
+          ? detail
+          : `task_followup_${r.status}`
+    throw makeError(message, undefined, r.status)
+  }
+  return r.json()
+}
+
+
 export function streamTask(taskId: string): EventSource {
   return new EventSource(
     `${KREWHUB}/api/v1/tasks/${taskId}/stream`,
