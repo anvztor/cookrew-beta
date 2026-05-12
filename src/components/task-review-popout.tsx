@@ -42,6 +42,10 @@ interface CrTaskReviewPopoutProps {
   onApprove?: (task: Task) => Promise<void> | void
   /** Optional: operator sends the task back for more work. */
   onSendBack?: (task: Task) => Promise<void> | void
+  /** Operator types a follow-up prompt and submits — the host wires
+   *  this to "create new task on the same bundle" (or a dedicated
+   *  follow-up endpoint later). Returning resolves closes the popout. */
+  onFollowUp?: (task: Task, prompt: string) => Promise<void> | void
 }
 
 
@@ -57,12 +61,13 @@ async function fetchLastReply(taskId: string): Promise<LastReply> {
 
 
 export function CrTaskReviewPopout({
-  task, onClose, onApprove, onSendBack,
+  task, onClose, onApprove, onSendBack, onFollowUp,
 }: CrTaskReviewPopoutProps) {
   const [reply, setReply] = useState<LastReply | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [actionInFlight, setActionInFlight] = useState<'approve' | 'sendback' | null>(null)
+  const [actionInFlight, setActionInFlight] = useState<'approve' | 'sendback' | 'followup' | null>(null)
+  const [followUpPrompt, setFollowUpPrompt] = useState('')
 
   useEffect(() => {
     if (!task) return
@@ -117,6 +122,22 @@ export function CrTaskReviewPopout({
     setActionInFlight('sendback')
     try {
       await onSendBack(task)
+      onClose?.()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setActionInFlight(null)
+    }
+  }
+
+  const handleFollowUp = async () => {
+    const prompt = followUpPrompt.trim()
+    if (!prompt || !onFollowUp) return
+    setActionInFlight('followup')
+    setError(null)
+    try {
+      await onFollowUp(task, prompt)
+      setFollowUpPrompt('')
       onClose?.()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -245,6 +266,92 @@ export function CrTaskReviewPopout({
           {error && (
             <div className="cr-mono" style={{ fontSize: 11, color: '#DC2626' }}>
               {error}
+            </div>
+          )}
+
+          {/* Follow-up prompt — keeps the loop open so the operator can
+              continue the conversation without closing the popout. The
+              host (MobileApp) wires onFollowUp to "create new task on
+              same bundle". */}
+          {onFollowUp && (
+            <div
+              style={{
+                marginTop: 4,
+                paddingTop: 12,
+                borderTop: `1px dashed ${accent}`,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+              }}
+            >
+              <div
+                className="cr-kicker"
+                style={{ fontSize: 8, color: accent, letterSpacing: 0.7 }}
+              >
+                ▸ FOLLOW UP
+              </div>
+              <textarea
+                value={followUpPrompt}
+                onChange={(e) => setFollowUpPrompt(e.target.value)}
+                disabled={!!actionInFlight}
+                placeholder="Continue the conversation — e.g. 'Add a screenshots section' / 'Squash the commits' / 'Revert the README change'…"
+                rows={3}
+                className="cr-bevel"
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  fontFamily: 'Inter,sans-serif',
+                  fontSize: 12,
+                  lineHeight: 1.4,
+                  resize: 'vertical',
+                  minHeight: 56,
+                  background: 'var(--cream-hi)',
+                }}
+                onKeyDown={(e) => {
+                  // Cmd/Ctrl+Enter submits (gives operator a faster path
+                  // than reaching for the SEND button).
+                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                    e.preventDefault()
+                    void handleFollowUp()
+                  }
+                }}
+              />
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <span
+                  className="cr-mono"
+                  style={{ fontSize: 8, color: 'var(--muted)' }}
+                >
+                  ⌘/Ctrl + Enter to send · new task on the same bundle
+                </span>
+                <button
+                  onClick={handleFollowUp}
+                  disabled={!followUpPrompt.trim() || !!actionInFlight}
+                  className="cr-bevel"
+                  style={{
+                    padding: '6px 14px',
+                    background:
+                      followUpPrompt.trim() && !actionInFlight
+                        ? accent
+                        : '#9CA3AF',
+                    color: 'white',
+                    fontFamily: 'Silkscreen,monospace',
+                    fontSize: 10,
+                    cursor:
+                      followUpPrompt.trim() && !actionInFlight
+                        ? 'pointer'
+                        : 'not-allowed',
+                  }}
+                >
+                  {actionInFlight === 'followup' ? 'SENDING…' : 'SEND ▸'}
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -957,11 +957,30 @@ export function MobileApp() {
       {/* PLS_REVIEW card for DONE / cooked tasks. Opens via onSelectTask
           when the operator taps a finished task. CrTaskReviewPopout
           fetches the brain's last_reply on its own and renders the
-          body (diff + artifacts + explanation) as sanitized HTML. */}
+          body (diff + artifacts + explanation) as sanitized HTML.
+          onFollowUp threads further prompts back into the same bundle
+          so the operator can iterate without closing the popout. */}
       {reviewTask && (
         <CrTaskReviewPopout
           task={reviewTask}
           onClose={() => setReviewTask(null)}
+          onFollowUp={async (_task, prompt) => {
+            if (!activeBundleId) {
+              showToast('No active bundle — cannot send follow-up', 3000)
+              return
+            }
+            try {
+              const { task: newTask } = await createTask(activeBundleId, prompt)
+              showToast(`Follow-up task created: ${newTask.id}`, 2200)
+            } catch (e) {
+              const err = e as { message?: string; status?: number }
+              showToast(
+                `Follow-up failed: ${err.message ?? err.status}`,
+                3500,
+              )
+              throw e  // let popout show the error too
+            }
+          }}
         />
       )}
 
