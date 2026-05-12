@@ -269,67 +269,35 @@ export function CrTaskReviewPopout({
             </div>
           )}
 
-          {/* Follow-up prompt — keeps the loop open so the operator can
-              continue the conversation without closing the popout. The
-              host (MobileApp) wires onFollowUp to "create new task on
-              same bundle". */}
+          {/* Follow-up — same shape as BLOCKED composer. Bare textarea,
+              right-aligned send button. ⌘/Ctrl+Enter to submit. */}
           {onFollowUp && (
-            <div
-              style={{
-                marginTop: 4,
-                paddingTop: 12,
-                borderTop: `1px dashed ${accent}`,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-              }}
-            >
-              <div
-                className="cr-kicker"
-                style={{ fontSize: 8, color: accent, letterSpacing: 0.7 }}
-              >
-                ▸ FOLLOW UP
-              </div>
+            <>
               <textarea
                 value={followUpPrompt}
                 onChange={(e) => setFollowUpPrompt(e.target.value)}
                 disabled={!!actionInFlight}
-                placeholder="Continue the conversation — e.g. 'Add a screenshots section' / 'Squash the commits' / 'Revert the README change'…"
-                rows={3}
+                placeholder="Reply…"
+                rows={2}
                 className="cr-bevel"
                 style={{
                   width: '100%',
                   padding: '8px 10px',
                   fontFamily: 'Inter,sans-serif',
-                  fontSize: 12,
+                  fontSize: 13,
                   lineHeight: 1.4,
                   resize: 'vertical',
-                  minHeight: 56,
+                  minHeight: 48,
                   background: 'var(--cream-hi)',
                 }}
                 onKeyDown={(e) => {
-                  // Cmd/Ctrl+Enter submits (gives operator a faster path
-                  // than reaching for the SEND button).
                   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
                     e.preventDefault()
                     void handleFollowUp()
                   }
                 }}
               />
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                <span
-                  className="cr-mono"
-                  style={{ fontSize: 8, color: 'var(--muted)' }}
-                >
-                  ⌘/Ctrl + Enter to send · new task on the same bundle
-                </span>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <button
                   onClick={handleFollowUp}
                   disabled={!followUpPrompt.trim() || !!actionInFlight}
@@ -349,10 +317,10 @@ export function CrTaskReviewPopout({
                         : 'not-allowed',
                   }}
                 >
-                  {actionInFlight === 'followup' ? 'SENDING…' : 'SEND ▸'}
+                  {actionInFlight === 'followup' ? 'SENDING…' : 'SEND'}
                 </button>
               </div>
-            </div>
+            </>
           )}
         </div>
 
