@@ -396,14 +396,42 @@ export function CrEventFeed({
             className="cr-phos-hi"
             style={{
               marginTop: 4,
+              position: 'relative',
               display: 'flex',
               alignItems: 'baseline',
               fontFamily: 'JetBrains Mono, monospace',
               fontSize: 14,
+              lineHeight: 1.2,
               cursor: 'text',
+              minHeight: 18,
             }}
           >
+            {/* Visible layer: prompt + typed text + trailing ▮ cursor.
+                The text mirrors the input's value so the cursor always
+                trails the last character. */}
             <span style={{ whiteSpace: 'pre' }}>{'> '}</span>
+            <span
+              aria-hidden
+              style={{
+                whiteSpace: 'pre',
+                color: 'var(--phos-hi)',
+              }}
+            >
+              {draft}
+            </span>
+            <span
+              aria-hidden
+              style={{
+                animation: sending ? undefined : 'cr-blink 0.7s step-end infinite',
+                pointerEvents: 'none',
+                color: 'var(--phos-hi)',
+                opacity: sending ? 0.4 : 1,
+              }}
+            >
+              ▮
+            </span>
+            {/* Invisible input absorbs key events. Native caret hidden
+                so only the trailing ▮ is visible. */}
             <input
               ref={inputRef}
               type="text"
@@ -414,32 +442,20 @@ export function CrEventFeed({
               autoComplete="off"
               aria-label="reply to task"
               style={{
-                flex: 1,
-                minWidth: 1,
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
                 background: 'transparent',
                 border: 'none',
                 outline: 'none',
                 fontFamily: 'JetBrains Mono, monospace',
                 fontSize: 14,
-                color: 'var(--phos-hi)',
-                textShadow: 'inherit',
+                color: 'transparent',
+                caretColor: 'transparent',
                 padding: 0,
                 margin: 0,
-                caretColor: 'var(--phos-hi)',
               }}
             />
-            {!draft && !sending && (
-              <span
-                aria-hidden
-                style={{
-                  animation: 'cr-blink 0.7s step-end infinite',
-                  marginLeft: -8,
-                  pointerEvents: 'none',
-                }}
-              >
-                ▮
-              </span>
-            )}
           </form>
         ) : (
           <div className="cr-phos-hi" style={{ marginTop: 4 }}>
