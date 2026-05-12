@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CallbackScreen } from '../components/auth-view/callback-screen'
+import { OAuthResultScreen } from '../components/auth-view/oauth-result-screen'
 import { CrEventFeed } from '../components/event-feed'
 import { CrFooter } from '../components/footer'
 import { CrHeader } from '../components/header'
@@ -7,22 +8,31 @@ import { CrMissionBoard } from '../components/mission-board'
 import { CrPartySidebar } from '../components/party-sidebar'
 import { HireAgentRuntimeModal } from '../components/auth-view/hire-agent-runtime-modal'
 import { CrHITLPopout } from '../components/hitl-popout'
+import { CrInvocationElicitPopout } from '../components/invocation-elicit-popout'
+import { CrAuthRequiredPopout } from '../components/auth-required-popout'
+import { CrTaskReviewPopout } from '../components/task-review-popout'
+import {
+  usePendingElicits,
+  type PendingElicit,
+} from '../lib/api/invocation-stream'
 import { redirectToLogin } from '../lib/auth/auth-client'
 import { useAuth } from '../lib/auth/useAuth'
 import {
   createBundle,
   createTask,
+  appendTaskFollowup,
   getBundle,
   listBundles,
   listRuntimes,
   postHitlAnswer,
-  resolveActiveRecipeId,
+  resolveActiveCookbookId,
+  submitInvocationResult,
   type Runtime,
   type Task as ApiTask,
 } from '../lib/api/krewhub-client'
 // Note: the in-process event-bus is intentionally NOT imported here.
-// All on-screen events come from the krewhub recipe SSE stream
-// (see CrEventFeed → useRecipeStream). Anything we'd emit here would
+// All on-screen events come from the krewhub cookbook SSE stream
+// (see CrEventFeed → useCookbookStream). Anything we'd emit here would
 // be frontend narration, which is exactly what we removed.
 import {
   dedupeLiveDaemonRuntimes,
@@ -34,12 +44,16 @@ import type { Bundle } from '../components/bundle-tabs'
 import type { Account } from '../lib/auth/auth-client'
 
 // Build-time fallback for local dev when no signed-in account is
-// available. In prod we resolve the operator's actual recipe via
-// resolveActiveRecipeId(account_id) on load — krewcli's auto-bootstrap
-// creates a per-user "my-cookbook" / "my-recipe" with a generated ID
-// that almost never matches a hardcoded constant.
-const FALLBACK_RECIPE_ID =
-  (import.meta.env.VITE_KREWHUB_RECIPE_ID as string | undefined) ?? ''
+// available. In prod we resolve the operator's actual cookbook via
+// resolveActiveCookbookId(account_id) on load — krewcli's auto-bootstrap
+// creates a per-user "my-cookbook" with a generated ID that almost
+// never matches a hardcoded constant. VITE_KREWHUB_RECIPE_ID is kept
+// as the legacy env-var name so existing local .env files keep working
+// during the rollout; it's read as the active *cookbook* id now.
+const FALLBACK_COOKBOOK_ID =
+  (import.meta.env.VITE_KREWHUB_COOKBOOK_ID as string | undefined) ??
+  (import.meta.env.VITE_KREWHUB_RECIPE_ID as string | undefined) ??
+  ''
 
 interface DesignBundle extends Bundle {
   /** Same as id — kept so the existing BundleTabs typing stays unchanged. */
@@ -175,10 +189,10 @@ export function MobileApp() {
 
   const [bundles, setBundles] = useState<DesignBundle[]>([])
   const [activeBundleId, setActiveBundleId] = useState<string>('')
-  // Active recipe — resolved per-user on login, persisted in
+  // Active cookbook — resolved per-user on login, persisted in
   // localStorage. Empty string while loading; bundle/listing calls
   // wait until it's set.
-  const [recipeId, setRecipeId] = useState<string>(FALLBACK_RECIPE_ID)
+  const [cookbookId, setCookbookId] = useState<string>(FALLBACK_COOKBOOK_ID)
   const activeBundle = bundles.find((b) => b.id === activeBundleId)
   const tasks = activeBundle?.tasks ?? []
 
@@ -201,6 +215,12 @@ export function MobileApp() {
   const [toast, setToast] = useState<string | null>(null)
   const [formatTick] = useState(0)
   const [hitlOpen, setHitlOpen] = useState<HitlItem | null>(null)
+  // DONE / cooked task review popout — opened on tap of a finished task.
+  // Fetches the brain's final reply for that task and renders as HTML.
+  const [reviewTask, setReviewTask] = useState<Task | null>(null)
+  const [elicitOpen, setElicitOpen] = useState<PendingElicit | null>(null)
+  // Auto-surface invocation-style HITL events from the cookbook stream.
+  const pendingElicits = usePendingElicits(cookbookId || undefined)
   const [shipError, setShipError] = useState<string | null>(null)
   // When the user clicks an assigned task on the board we pop the
   // EventFeed open and pre-select that agent's tab + task focus.
@@ -234,6 +254,32 @@ export function MobileApp() {
     void refreshRoster(state.account)
   }, [state, refreshRoster])
 
+  // Auto-surface the next pending invocation-style elicit. If an
+  // operator already has one open we leave it; otherwise we pop the
+  // freshest one. `usePendingElicits` filters out expired and sorts
+  // newest-first, so [0] is the most recently raised live elicit.
+  useEffect(() => {
+    if (elicitOpen) return
+    if (pendingElicits.length === 0) return
+    setElicitOpen(pendingElicits[0])
+  }, [pendingElicits, elicitOpen])
+
+  // Auto-close the popup if the invocation it's pinned to has reached
+  // a terminal state on the server (server-side deadline expired,
+  // operator-cancelled from elsewhere, or claude's session ended). The
+  // pendingElicits hook removes terminal items; if the currently-open
+  // invocation is no longer in the live list, the popup should close
+  // and the next pending elicit (if any) auto-pop on the next tick.
+  // Without this, operators submit "banana" into a terminal invocation
+  // and get a confusing 409.
+  useEffect(() => {
+    if (!elicitOpen) return
+    const stillLive = pendingElicits.some(
+      (e) => e.invocationId === elicitOpen.invocationId,
+    )
+    if (!stillLive) setElicitOpen(null)
+  }, [pendingElicits, elicitOpen])
+
   // ── 1.4 Post-pair landing — surface the freshly hired agent ─────
   // /auth/login confirm card → /agents/pair → redirects here with
   // ?paired=<runtime_id>. Kick the roster + bundles refresh
@@ -251,31 +297,31 @@ export function MobileApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.status])
 
-  // ── 1.5 Recipe discovery ────────────────────────────────────────
-  // Each user gets their own cookbook + recipe via krewcli's
-  // auto-bootstrap (`my-cookbook` / `my-recipe`). The IDs are
-  // generated, not predictable, so the SPA must resolve them per
-  // signed-in account. localStorage caches the result for snappy
-  // reloads; ?recipe=<id> on the URL overrides the cache (used by
-  // operators who own multiple recipes).
+  // ── 1.5 Cookbook discovery ──────────────────────────────────────
+  // Each user gets their own cookbook via krewcli's auto-bootstrap
+  // (`my-cookbook`). The IDs are generated, not predictable, so the
+  // SPA must resolve them per signed-in account. localStorage caches
+  // the result for snappy reloads; ?cookbook=<id> (or legacy ?recipe=)
+  // on the URL overrides the cache.
   useEffect(() => {
     if (state.status !== 'authed') return
-    const overrideFromUrl = new URLSearchParams(window.location.search).get('recipe')
+    const search = new URLSearchParams(window.location.search)
+    const overrideFromUrl = search.get('cookbook') ?? search.get('recipe')
     if (overrideFromUrl) {
-      localStorage.setItem('krewhub_active_recipe_id', overrideFromUrl)
-      setRecipeId(overrideFromUrl)
+      localStorage.setItem('krewhub_active_cookbook_id', overrideFromUrl)
+      setCookbookId(overrideFromUrl)
       return
     }
     let cancelled = false
-    void resolveActiveRecipeId(state.account.account_id)
+    void resolveActiveCookbookId(state.account.account_id)
       .then((id) => {
         if (cancelled) return
         if (id) {
-          setRecipeId(id)
-        } else if (FALLBACK_RECIPE_ID) {
-          setRecipeId(FALLBACK_RECIPE_ID)
+          setCookbookId(id)
+        } else if (FALLBACK_COOKBOOK_ID) {
+          setCookbookId(FALLBACK_COOKBOOK_ID)
         } else {
-          // resolveActiveRecipeId already tried POST /me/init-workspace;
+          // resolveActiveCookbookId already tried POST /me/init-workspace;
           // if we still have nothing the network is genuinely down or
           // krewhub is offline. Surface a useful hint instead of the
           // legacy "still loading" stall.
@@ -287,15 +333,15 @@ export function MobileApp() {
       })
       .catch((e) => {
         const err = e as { message?: string }
-        console.warn('recipe discovery failed:', err.message)
-        showToast(`recipe discovery failed: ${err.message ?? 'unknown'}`, 4200)
+        console.warn('cookbook discovery failed:', err.message)
+        showToast(`cookbook discovery failed: ${err.message ?? 'unknown'}`, 4200)
       })
     return () => {
       cancelled = true
     }
   }, [state])
 
-  // ── 2. Bundle bootstrap: list bundles for the configured recipe ──
+  // ── 2. Bundle bootstrap: list bundles for the active cookbook ────
   // Real bundles only — no frontend-only `BUN_4A2C` placeholder.
   // Filters to bundles the caller actually owns (legacy bundles with
   // owner_account_id="<username>" instead of "<account_id>" 403 every
@@ -304,10 +350,10 @@ export function MobileApp() {
   // default active tab is one we just created.
   const refreshBundles = useCallback(async () => {
     if (state.status !== 'authed') return
-    if (!recipeId) return  // Recipe still resolving — wait for it.
+    if (!cookbookId) return  // Cookbook still resolving — wait for it.
     const acc = state.account
     try {
-      const summaries = await listBundles(recipeId)
+      const summaries = await listBundles(cookbookId)
       const owned = summaries.filter(
         (b) =>
           b.owner_account_id === acc.account_id ||
@@ -338,13 +384,13 @@ export function MobileApp() {
       const err = e as { message?: string }
       console.warn('bundle list failed:', err.message)
     }
-  }, [state, recipeId])
+  }, [state, cookbookId])
 
   useEffect(() => {
     if (state.status !== 'authed') return
-    if (!recipeId) return
+    if (!cookbookId) return
     void refreshBundles()
-  }, [state.status, recipeId, refreshBundles])
+  }, [state.status, cookbookId, refreshBundles])
 
   // Light polling (every 6s) of the active bundle so completed-status
   // updates from the daemon are visible without per-task SSE wiring.
@@ -393,12 +439,12 @@ export function MobileApp() {
   // that should opt back into autoplan.
   const addBundle = async () => {
     if (state.status !== 'authed') return
-    if (!recipeId) {
-      showToast('Recipe still loading — try again in a moment.', 2400)
+    if (!cookbookId) {
+      showToast('Cookbook still loading — try again in a moment.', 2400)
       return
     }
     try {
-      const b = await createBundle(recipeId, '', { autoplan: false })
+      const b = await createBundle(cookbookId, '', { autoplan: false })
       setBundles((bs) => [
         ...bs,
         // Stable display name — the prompt is intentionally empty so
@@ -598,12 +644,12 @@ export function MobileApp() {
           err.status === 404 ||
           err.message === 'Not your bundle' ||
           err.message === 'Bundle not found')
-      if (recoverable && recipeId) {
+      if (recoverable && cookbookId) {
         try {
           // Recovery bundle: just a fresh container for the user's
           // typed task. No autoplan — they're shipping a one-shot
           // task, not asking the planner for a graph.
-          const fresh = await createBundle(recipeId, text.slice(0, 64), {
+          const fresh = await createBundle(cookbookId, text.slice(0, 64), {
             autoplan: false,
           })
           setBundles((bs) => [
@@ -667,6 +713,8 @@ export function MobileApp() {
   }
 
   const onSelectTask = (t: Task) => {
+    // BLOCKED state — open the HITL popout (handled by setHitlOpen below
+    // OR by the elicit-popout if the task has a pending invocation).
     if (t.hitl === 'needs_input') {
       const list = deriveHitl(tasks)
       const it = list.find((h) => h.taskId === t.id)
@@ -675,16 +723,24 @@ export function MobileApp() {
         return
       }
     }
+    // DRAFT state — fall back into the prompt composer.
     if (t.status === 'draft') {
       setDraftId(t.id)
       setPrompt(t.title || '')
       setMode('assign')
       return
     }
-    // Any non-draft, non-hitl task: pop the event feed open and focus
-    // it on this task's agent. Even if the agent hasn't claimed yet
-    // (agentId undefined), opening the feed against the taskId is the
-    // useful default.
+    // DONE / cooked state — open the PLS_REVIEW popout. The brain's
+    // final reply (with diff, artifacts, explanation as HTML) is
+    // fetched inside CrTaskReviewPopout via /tasks/{id}/last-reply.
+    if (t.status === 'done' || t.status === 'cooked') {
+      setReviewTask(t)
+      return
+    }
+    // IN PROGRESS state (working / open / queued / orch) — slide out
+    // the event feed and focus on this task. Even if the agent hasn't
+    // claimed yet (agentId undefined), opening the feed against the
+    // taskId is the useful default.
     setFocusedTask({ taskId: t.id, agentId: t.agentId })
     setPartyOpen(false)
     setFeedOpen(true)
@@ -699,6 +755,9 @@ export function MobileApp() {
 
   if (window.location.pathname === '/auth/callback') {
     return <CallbackScreen />
+  }
+  if (window.location.pathname === '/oauth-result') {
+    return <OAuthResultScreen />
   }
   if (state.status === 'loading' || state.status === 'anon') {
     return (
@@ -765,6 +824,11 @@ export function MobileApp() {
           onLinkTasks={linkTasks}
           formatTick={formatTick}
           onSelectTask={onSelectTask}
+          onShowFeed={(t) => {
+            setFocusedTask({ taskId: t.id, agentId: t.agentId })
+            setPartyOpen(false)
+            setFeedOpen(true)
+          }}
           onOpenHitl={(h) => setHitlOpen(h)}
         />
       </div>
@@ -810,7 +874,7 @@ export function MobileApp() {
       <div className="cr-drawer right">
         <CrEventFeed
           variant="mobile"
-          recipeId={recipeId}
+          cookbookId={cookbookId}
           focusTaskId={focusedTask?.taskId}
           focusAgentId={focusedTask?.agentId}
           onClose={() => {
@@ -837,6 +901,13 @@ export function MobileApp() {
           item={hitlOpen}
           task={tasks.find((t) => t.id === hitlOpen.taskId)}
           onClose={() => setHitlOpen(null)}
+          onShowFeed={() => {
+            const t = tasks.find((x) => x.id === hitlOpen.taskId)
+            setHitlOpen(null)
+            setFocusedTask({ taskId: hitlOpen.taskId, agentId: t?.agentId })
+            setPartyOpen(false)
+            setFeedOpen(true)
+          }}
           onSubmit={(payload) => {
             if (payload.kind !== 'answer') {
               setHitlOpen(null)
@@ -859,6 +930,74 @@ export function MobileApp() {
                   3000,
                 )
               })
+          }}
+        />
+      )}
+
+      {/* Invocation Contract slice 5 — schema-driven elicit popout for
+          new-style HITL invocations spawned by `delegate(to="human", ...)`.
+          Auto-opens on first pending elicit; closes on submit/decline.
+          Dispatches to CrAuthRequiredPopout when the elicit carries a
+          structured `op: "auth_required"` from the brain (just-in-time
+          credential bootstrap). */}
+      {elicitOpen && elicitOpen.op === 'auth_required' ? (
+        <CrAuthRequiredPopout
+          item={elicitOpen}
+          onClose={() => setElicitOpen(null)}
+          onResolved={() => {
+            setElicitOpen(null)
+            showToast('Credential stored — agent resuming', 1800)
+          }}
+        />
+      ) : elicitOpen && (
+        <CrInvocationElicitPopout
+          item={elicitOpen}
+          onClose={() => setElicitOpen(null)}
+          onSubmit={(envelope) => {
+            const invocationId = elicitOpen.invocationId
+            setElicitOpen(null)
+            submitInvocationResult(invocationId, envelope)
+              .then(() => {
+                showToast('Sent — agent resuming', 1800)
+              })
+              .catch((e) => {
+                const err = e as { message?: string; status?: number }
+                showToast(
+                  `Submit failed: ${err.message ?? err.status}`,
+                  3000,
+                )
+              })
+          }}
+        />
+      )}
+
+      {/* PLS_REVIEW card for DONE / cooked tasks. Opens via onSelectTask
+          when the operator taps a finished task. CrTaskReviewPopout
+          fetches the brain's last_reply on its own and renders the
+          body (diff + artifacts + explanation) as sanitized HTML.
+          onFollowUp threads further prompts back into the same bundle
+          so the operator can iterate without closing the popout. */}
+      {reviewTask && (
+        <CrTaskReviewPopout
+          task={reviewTask}
+          onClose={() => setReviewTask(null)}
+          onFollowUp={async (task, prompt) => {
+            try {
+              const { status_flipped } = await appendTaskFollowup(task.id, prompt)
+              showToast(
+                status_flipped
+                  ? 'Reply sent — task reopened, agent picking it up'
+                  : 'Reply sent to live task',
+                2200,
+              )
+            } catch (e) {
+              const err = e as { message?: string; status?: number }
+              showToast(
+                `Reply failed: ${err.message ?? err.status}`,
+                3500,
+              )
+              throw e
+            }
           }}
         />
       )}

@@ -1,0 +1,149 @@
+/* cr-agent-html — styles for sanitized brain-emitted HTML.
+ *
+ * The brain emits semantic HTML; cookrew-beta renders it inside HITL
+ * popouts (BLOCKED) and task-result popouts (DONE). This sheet maps
+ * the brain's structural choices (headings, lists, code, tables) to
+ * the cookrew arcade aesthetic without losing readability.
+ *
+ * Scoping: every rule is under .cr-agent-html to keep it from leaking
+ * into the rest of the UI.
+ */
+
+.cr-agent-html {
+  --agent-rule: rgba(0, 0, 0, 0.18);
+  --agent-code-bg: rgba(0, 0, 0, 0.06);
+  --agent-code-fg: var(--ink);
+  --agent-link: var(--blue, #1d4ed8);
+  word-break: break-word;
+}
+
+.cr-agent-html > * + * {
+  margin-top: 0.6em;
+}
+
+.cr-agent-html h1,
+.cr-agent-html h2,
+.cr-agent-html h3,
+.cr-agent-html h4,
+.cr-agent-html h5,
+.cr-agent-html h6 {
+  font-family: 'Silkscreen', monospace;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-top: 0.4em;
+}
+.cr-agent-html h1 { font-size: 1.25em; }
+.cr-agent-html h2 { font-size: 1.15em; }
+.cr-agent-html h3 { font-size: 1.05em; }
+.cr-agent-html h4,
+.cr-agent-html h5,
+.cr-agent-html h6 { font-size: 1em; }
+
+.cr-agent-html p {
+  line-height: 1.5;
+}
+
+.cr-agent-html ul,
+.cr-agent-html ol {
+  padding-left: 1.4em;
+}
+.cr-agent-html li + li {
+  margin-top: 0.25em;
+}
+
+.cr-agent-html code {
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 0.92em;
+  background: var(--agent-code-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--agent-code-fg);
+}
+.cr-agent-html pre {
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 0.85em;
+  background: var(--agent-code-bg);
+  padding: 8px 10px;
+  border-radius: 4px;
+  overflow-x: auto;
+  line-height: 1.4;
+}
+.cr-agent-html pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.cr-agent-html kbd {
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 0.85em;
+  background: var(--cream-hi, #f5e6c8);
+  border: 1px solid var(--agent-rule);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.cr-agent-html blockquote {
+  margin: 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--agent-rule);
+  color: var(--muted, #6b7280);
+  font-style: italic;
+}
+
+.cr-agent-html table {
+  border-collapse: collapse;
+  font-size: 0.92em;
+  display: block;
+  overflow-x: auto;
+}
+.cr-agent-html th,
+.cr-agent-html td {
+  padding: 4px 8px;
+  border: 1px solid var(--agent-rule);
+  text-align: left;
+}
+.cr-agent-html th {
+  background: var(--agent-code-bg);
+  font-family: 'Silkscreen', monospace;
+  font-weight: 600;
+  font-size: 0.85em;
+  letter-spacing: 0.4px;
+}
+
+.cr-agent-html a {
+  color: var(--agent-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.cr-agent-html a:hover {
+  text-decoration-thickness: 2px;
+}
+
+.cr-agent-html hr {
+  border: none;
+  border-top: 1px solid var(--agent-rule);
+  margin: 1em 0;
+}
+
+.cr-agent-html details {
+  border: 1px solid var(--agent-rule);
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+.cr-agent-html details > summary {
+  cursor: pointer;
+  font-family: 'Silkscreen', monospace;
+  font-size: 0.9em;
+}
+
+.cr-agent-html mark {
+  background: var(--cream-hi, #fef9c3);
+  padding: 0 2px;
+}
+
+.cr-agent-html del {
+  text-decoration: line-through;
+  color: var(--muted, #6b7280);
+}

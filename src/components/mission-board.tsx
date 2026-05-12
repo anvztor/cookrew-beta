@@ -11,9 +11,11 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { CrChip, CrLED } from './atoms/atoms'
+import { FeedDot } from './atoms/feed-dot'
 import { CR_STATUS, type HitlItem, type Task } from '../data/tasks'
 import type { Variant } from './party-sidebar'
 import { CrBundleTabs, type Bundle } from './bundle-tabs'
+import { getTaskLastHumanInput } from '../lib/api/krewhub-client'
 
 interface CrTaskLiveCardProps {
   t: Task
@@ -21,6 +23,7 @@ interface CrTaskLiveCardProps {
   highlight?: boolean
   hitlFocus?: boolean
   onClick?: () => void
+  onShowFeed?: () => void
   style?: CSSProperties
   dragging?: boolean
 }
@@ -31,6 +34,7 @@ export function CrTaskLiveCard({
   highlight = false,
   hitlFocus = false,
   onClick,
+  onShowFeed,
   style,
   dragging,
 }: CrTaskLiveCardProps) {
@@ -42,6 +46,29 @@ export function CrTaskLiveCard({
   const isWorking = t.status === 'working' && !isBlocked && !isCooked
 
   const st = CR_STATUS[isCooked ? 'cooked' : isBlocked ? 'blocked' : t.status]
+
+  // Latest operator instruction for this task — task.title is the
+  // initial bundle prompt, so only override it when a follow-up
+  // exists. Lazy per-card fetch is fine: ~10 tiles per bundle and the
+  // endpoint is a single indexed lookup.
+  const [followup, setFollowup] = useState<string | null>(null)
+  useEffect(() => {
+    if (isDraft || !t.id) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const r = await getTaskLastHumanInput(t.id)
+        if (!cancelled && r.kind === 'human_followup' && r.text.trim()) {
+          setFollowup(r.text)
+        }
+      } catch {
+        // ignore — fall back to task.title
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [t.id, isDraft])
 
   if (isOrch) {
     const phase = t.orchPhase || 'thinking'
@@ -84,19 +111,22 @@ export function CrTaskLiveCard({
             </span>
             <span className="cr-led busy" />
           </div>
-          <span
-            className="cr-phos-hi"
-            style={{
-              fontFamily: 'Silkscreen,monospace',
-              fontSize: 7,
-              letterSpacing: 0.6,
-              border: '1.5px solid var(--phos-dim)',
-              padding: '1px 5px',
-              background: 'rgba(233,185,73,0.08)',
-            }}
-          >
-            ORCH · {phase.toUpperCase()}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span
+              className="cr-phos-hi"
+              style={{
+                fontFamily: 'Silkscreen,monospace',
+                fontSize: 7,
+                letterSpacing: 0.6,
+                border: '1.5px solid var(--phos-dim)',
+                padding: '1px 5px',
+                background: 'rgba(233,185,73,0.08)',
+              }}
+            >
+              ORCH · {phase.toUpperCase()}
+            </span>
+            {onShowFeed && <FeedDot tone="phos" onClick={() => onShowFeed()} />}
+          </div>
         </div>
         <div
           className="cr-phos-hi"
@@ -246,17 +276,25 @@ export function CrTaskLiveCard({
             }
           />
         </div>
-        <CrChip
-          style={{
-            background: st.bg,
-            color: st.ink,
-            borderColor: isDraft ? 'var(--ink-soft)' : 'var(--line)',
-            borderStyle: isDraft ? 'dashed' : 'solid',
-            fontSize: 7,
-          }}
-        >
-          {st.label}
-        </CrChip>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <CrChip
+            style={{
+              background: st.bg,
+              color: st.ink,
+              borderColor: isDraft ? 'var(--ink-soft)' : 'var(--line)',
+              borderStyle: isDraft ? 'dashed' : 'solid',
+              fontSize: 7,
+            }}
+          >
+            {st.label}
+          </CrChip>
+          {onShowFeed && !isDraft && (
+            <FeedDot
+              tone={isBlocked ? 'rose' : isCooked ? 'ink' : 'ink'}
+              onClick={() => onShowFeed()}
+            />
+          )}
+        </div>
       </div>
       <div
         style={{
@@ -271,6 +309,37 @@ export function CrTaskLiveCard({
       >
         {t.title || (isDraft ? 'New quest' : '')}
       </div>
+      {followup && (
+        <div
+          className="cr-mono"
+          style={{
+            display: 'flex',
+            gap: 4,
+            fontSize: 10,
+            color: 'var(--ink-soft)',
+            background: 'rgba(56,189,248,0.06)',
+            border: '1px dashed rgba(56,189,248,0.35)',
+            padding: '3px 6px',
+            lineHeight: 1.35,
+            maxHeight: 36,
+            overflow: 'hidden',
+          }}
+          title={followup}
+        >
+          <span style={{ color: '#0369A1', fontWeight: 700 }}>&gt;</span>
+          <span
+            style={{
+              flex: 1,
+              overflow: 'hidden',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+            }}
+          >
+            {followup}
+          </span>
+        </div>
+      )}
       <div
         style={{
           display: 'flex',
@@ -414,6 +483,7 @@ interface CrTaskCanvasProps {
   tasks: Task[]
   variant?: Variant
   onSelect?: (t: Task) => void
+  onShowFeed?: (t: Task) => void
   onDoubleClickCanvas?: (point: { x: number; y: number }) => void
   draftId?: string | null
   onLinkTasks?: (srcId: string, tgtId: string) => void
@@ -433,6 +503,7 @@ export function CrTaskCanvas({
   tasks,
   variant = 'desktop',
   onSelect,
+  onShowFeed,
   onDoubleClickCanvas,
   draftId,
   onLinkTasks,
@@ -915,6 +986,7 @@ export function CrTaskCanvas({
                 highlight={t.id === draftId}
                 hitlFocus={t.id === hitlFocusTaskId}
                 onClick={() => onSelect?.(t)}
+                onShowFeed={onShowFeed ? () => onShowFeed(t) : undefined}
               />
             </div>
           )
@@ -1223,6 +1295,7 @@ interface CrMissionBoardProps {
   tasks: Task[]
   hitl?: HitlItem[]
   onSelectTask?: (t: Task) => void
+  onShowFeed?: (t: Task) => void
   onAddDraft?: (point: { x: number; y: number }) => void
   draftId?: string | null
   onLinkTasks?: (srcId: string, tgtId: string) => void
@@ -1241,6 +1314,7 @@ export function CrMissionBoard({
   tasks,
   hitl = [],
   onSelectTask,
+  onShowFeed,
   onAddDraft,
   draftId,
   onLinkTasks,
@@ -1291,6 +1365,7 @@ export function CrMissionBoard({
           tasks={tasks}
           variant={variant}
           onSelect={onSelectTask}
+          onShowFeed={onShowFeed}
           onDoubleClickCanvas={onAddDraft}
           draftId={draftId}
           onLinkTasks={onLinkTasks}

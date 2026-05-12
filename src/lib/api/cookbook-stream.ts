@@ -1,7 +1,7 @@
-// Real SSE feed for a recipe.
+// Real SSE feed for a cookbook.
 //
-// Subscribes to `GET /api/v1/recipes/{recipe_id}/stream` and converts the
-// typed SSE events into display rows. Replaces the in-process event-bus
+// Subscribes to `GET /api/v1/cookbooks/{cookbook_id}/stream` and converts
+// the typed SSE events into display rows. Replaces the in-process event-bus
 // frontend narration: every line in the EventFeed below now corresponds
 // to a real backend mutation.
 
@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 const KREWHUB =
   (import.meta.env.VITE_KREWHUB_URL as string | undefined) ?? 'http://localhost:8420'
 
-export interface RecipeEvent {
+export interface CookbookEvent {
   /** Stable id for keying React lists — synthesized client-side. */
   id: string
   /** HH:MM:SS for display. */
@@ -50,6 +50,9 @@ interface EventSlots {
   agent: string
   taskId?: string
   msg: string
+  /** Overrides the outer SSE event name for the kind column when the
+   *  underlying event_added carries a richer inner type. */
+  kindOverride?: string
 }
 
 function summarise(eventName: string, payload: Record<string, unknown>): EventSlots {
@@ -58,15 +61,45 @@ function summarise(eventName: string, payload: Record<string, unknown>): EventSl
   // server provides `body` (human-readable) + `type` (kind) + `actor_id`
   // so we can attribute the line to the correct agent tab.
   if (eventName === 'event.added' || eventName === 'event.modified') {
-    const type = asString(payload.type) || 'event'
+    const rawType = asString(payload.type) || 'event'
+    const actorType = asString(payload.actor_type)
     const actor = asString(payload.actor_id) || 'SYSTEM'
-    const body = asString(payload.body)
     const taskId = asString(payload.task_id) || undefined
-    const head = body || type
+    // Human follow-ups ride the agent_reply slot per the events.type
+    // CHECK constraint workaround. Re-label so the feed shows the
+    // semantic kind, not the storage kind.
+    const innerKind =
+      typeof (payload.payload as Record<string, unknown> | null | undefined)
+        ?.kind === 'string'
+        ? ((payload.payload as Record<string, unknown>).kind as string)
+        : ''
+    const type =
+      actorType === 'human' && (rawType === 'agent_reply' || innerKind === 'human_followup')
+        ? 'human_followup'
+        : rawType
+    // Prefer the rich text in the inner payload (full agent_reply text,
+    // tool_result output, thinking content) over the short `body`
+    // summary, which backends pre-truncate to ~120 chars and so cuts
+    // off mid-word in the feed.
+    const inner = (payload.payload as Record<string, unknown> | null | undefined) ?? {}
+    const innerText =
+      asString(inner.text) ||
+      asString(inner.output) ||
+      asString(payload.body) ||
+      type
+    // Show the full text — the feed row uses flex:1 + pre-wrap so long
+    // bodies render across multiple lines cleanly. Cap is paranoia
+    // only (4 KB) to bound DOM size for runaway agents.
+    const MAX_FEED_CHARS = 4000
+    const head =
+      innerText.length > MAX_FEED_CHARS
+        ? innerText.slice(0, MAX_FEED_CHARS - 1) + '…'
+        : innerText
     return {
       agent: actor,
       taskId,
-      msg: `${type} · ${head.slice(0, 140)}`,
+      msg: head,
+      kindOverride: type,
     }
   }
 
@@ -143,18 +176,18 @@ const KNOWN_EVENT_TYPES = [
   'ping',
 ]
 
-export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
-  const [events, setEvents] = useState<RecipeEvent[]>([])
+export function useCookbookStream(cookbookId: string | undefined): CookbookEvent[] {
+  const [events, setEvents] = useState<CookbookEvent[]>([])
   const seqRef = useRef(0)
 
   useEffect(() => {
-    if (!recipeId) return
-    const url = `${KREWHUB}/api/v1/recipes/${recipeId}/stream`
+    if (!cookbookId) return
+    const url = `${KREWHUB}/api/v1/cookbooks/${cookbookId}/stream`
     const es = new EventSource(url, { withCredentials: true })
 
     const appendSynthetic = (kind: string, msg: string) => {
       seqRef.current += 1
-      const ev: RecipeEvent = {
+      const ev: CookbookEvent = {
         id: `${kind}_${seqRef.current}_${Date.now()}`,
         t: nowStamp(),
         agent: 'SYSTEM',
@@ -179,12 +212,12 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
       }
       const slots = summarise(eventName, payload)
       seqRef.current += 1
-      const ev: RecipeEvent = {
+      const ev: CookbookEvent = {
         id: `sse_${seqRef.current}_${Date.now()}`,
         t: nowStamp(),
         agent: slots.agent,
         taskId: slots.taskId,
-        kind: eventName,
+        kind: slots.kindOverride ?? eventName,
         msg: slots.msg,
       }
       setEvents((cur) => {
@@ -193,7 +226,7 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
       })
     }
 
-    es.onopen = () => appendSynthetic('sse.open', 'recipe stream connected')
+    es.onopen = () => appendSynthetic('sse.open', 'cookbook stream connected')
 
     const listeners: Record<string, (e: MessageEvent) => void> = {}
     KNOWN_EVENT_TYPES.forEach((t) => {
@@ -217,7 +250,7 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
       Object.entries(listeners).forEach(([t, fn]) => es.removeEventListener(t, fn))
       es.close()
     }
-  }, [recipeId])
+  }, [cookbookId])
 
   return events
 }

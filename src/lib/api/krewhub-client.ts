@@ -82,6 +82,85 @@ export async function createTask(
   return r.json()
 }
 
+/** Append an operator-typed prompt to an existing task's session.
+ *
+ * Used by CrTaskReviewPopout (DONE) and the event-feed Reply composer
+ * (WORKING). Writes a `human_followup`-discriminated event onto the
+ * task's tape. If the task is in a terminal state ('done'), it's
+ * flipped back to 'open' so the daemon re-claims and the brain
+ * resumes with the new prompt in its tape history.
+ *
+ * Crucially: does NOT spawn a new task — keeps the conversation
+ * threaded on the original task.
+ */
+export async function appendTaskFollowup(
+  taskId: string,
+  prompt: string,
+): Promise<{ task: Record<string, unknown>; event_id: string; status_flipped: boolean }> {
+  const r = await fetch(`${KREWHUB}/api/v1/tasks/${taskId}/followup`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  })
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}))
+    const detail = body?.detail
+    const message =
+      typeof detail === 'object' && detail !== null
+        ? (detail as { message?: string }).message ?? `task_followup_${r.status}`
+        : typeof detail === 'string'
+          ? detail
+          : `task_followup_${r.status}`
+    throw makeError(message, undefined, r.status)
+  }
+  return r.json()
+}
+
+
+export interface TaskHistoryEvent {
+  id: string
+  type: string
+  actor_id: string
+  actor_type: 'human' | 'agent' | 'system' | 'hook'
+  body: string
+  payload: Record<string, unknown>
+  sequence: number
+  created_at: string
+}
+
+export async function getTaskEvents(
+  taskId: string,
+  opts: { limit?: number; sinceSeq?: number } = {},
+): Promise<{ task_id: string; events: TaskHistoryEvent[]; count: number }> {
+  const u = new URL(`${KREWHUB}/api/v1/tasks/${taskId}/events`)
+  if (opts.limit) u.searchParams.set('limit', String(opts.limit))
+  if (typeof opts.sinceSeq === 'number') u.searchParams.set('since_seq', String(opts.sinceSeq))
+  const r = await fetch(u.toString(), { credentials: 'include' })
+  if (!r.ok) throw makeError(`task_events_${r.status}`, undefined, r.status)
+  return r.json()
+}
+
+export async function getTaskLastHumanInput(
+  taskId: string,
+): Promise<{ task_id: string; kind: 'human_followup' | 'bundle_prompt' | 'none'; text: string; created_at: string | null }> {
+  const r = await fetch(`${KREWHUB}/api/v1/tasks/${taskId}/last-human-input`, {
+    credentials: 'include',
+  })
+  if (!r.ok) throw makeError(`task_last_human_${r.status}`, undefined, r.status)
+  return r.json()
+}
+
+export async function getTaskLastReply(
+  taskId: string,
+): Promise<{ task_id: string; kind: 'agent_reply' | 'milestone' | 'none'; html: string; created_at: string | null }> {
+  const r = await fetch(`${KREWHUB}/api/v1/tasks/${taskId}/last-reply`, {
+    credentials: 'include',
+  })
+  if (!r.ok) throw makeError(`task_last_reply_${r.status}`, undefined, r.status)
+  return r.json()
+}
+
 export function streamTask(taskId: string): EventSource {
   return new EventSource(
     `${KREWHUB}/api/v1/tasks/${taskId}/stream`,
@@ -91,7 +170,7 @@ export function streamTask(taskId: string): EventSource {
 
 export interface BundleSummary {
   id: string
-  recipe_id: string
+  cookbook_id: string
   prompt: string | null
   status: string
   created_by: string
@@ -119,25 +198,16 @@ export async function getBundle(bundleId: string): Promise<BundleDetail | null> 
   return r.json()
 }
 
-// ── Cookbooks / recipes ────────────────────────────────────────
+// ── Cookbooks ──────────────────────────────────────────────────
 // Each user gets per-account cookbooks via `krewcli login`'s
-// auto-bootstrap (creates "my-cookbook" + "my-recipe" if absent).
-// The SPA discovers them on load instead of relying on a hardcoded
-// recipe ID — that approach broke for any user who didn't happen to
-// own the build-time-baked recipe.
+// auto-bootstrap (creates "my-cookbook" if absent). The SPA discovers
+// the active cookbook on load — recipes were retired in
+// anvztor/krewhub#1, so cookbook is now the bundle's parent scope.
 
 export interface Cookbook {
   id: string
   name: string
   owner_id: string | null
-  created_at: string
-}
-
-export interface Recipe {
-  id: string
-  name: string
-  cookbook_id: string
-  created_by: string
   created_at: string
 }
 
@@ -152,7 +222,6 @@ export async function listCookbooks(ownerId?: string): Promise<Cookbook[]> {
 
 export async function getCookbookDetail(cookbookId: string): Promise<{
   cookbook: Cookbook
-  recipes: Recipe[]
 }> {
   const r = await fetch(`${KREWHUB}/api/v1/cookbooks/${cookbookId}`, {
     credentials: 'include',
@@ -162,42 +231,37 @@ export async function getCookbookDetail(cookbookId: string): Promise<{
 }
 
 /**
- * Resolve the current user's "active" recipe.
+ * Resolve the current user's "active" cookbook.
  *
  * Strategy:
- *   1. localStorage cache (krewhub_active_recipe_id) — survives reloads.
- *   2. First owned cookbook → first recipe inside it.
+ *   1. localStorage cache (krewhub_active_cookbook_id) — survives reloads.
+ *   2. First owned cookbook from /api/v1/cookbooks.
  *   3. POST /api/v1/me/init-workspace — server bootstraps a default
- *      cookbook + recipe for first-time web users who haven't run
+ *      cookbook for first-time web users who haven't run
  *      `krewcli login` on their machine yet. Idempotent.
  *   4. null when even init failed (network blip; UI surfaces a toast).
  */
-export async function resolveActiveRecipeId(
+export async function resolveActiveCookbookId(
   accountId: string,
 ): Promise<string | null> {
-  const cached = localStorage.getItem('krewhub_active_recipe_id')
+  const cached = localStorage.getItem('krewhub_active_cookbook_id')
   if (cached) return cached
   const cookbooks = await listCookbooks(accountId)
   if (cookbooks.length > 0) {
-    const detail = await getCookbookDetail(cookbooks[0].id)
-    const recipe = detail.recipes[0]
-    if (recipe) {
-      localStorage.setItem('krewhub_active_recipe_id', recipe.id)
-      return recipe.id
-    }
+    localStorage.setItem('krewhub_active_cookbook_id', cookbooks[0].id)
+    return cookbooks[0].id
   }
   // No cookbook yet → server-side bootstrap.
   const init = await initWorkspace().catch(() => null)
   if (init) {
-    localStorage.setItem('krewhub_active_recipe_id', init.recipe.id)
-    return init.recipe.id
+    localStorage.setItem('krewhub_active_cookbook_id', init.cookbook.id)
+    return init.cookbook.id
   }
   return null
 }
 
 export interface InitWorkspaceResult {
   cookbook: Cookbook
-  recipe: Recipe
 }
 
 export async function initWorkspace(): Promise<InitWorkspaceResult> {
@@ -230,8 +294,107 @@ export async function postHitlAnswer(taskId: string, answer: string): Promise<vo
   }
 }
 
-export async function listBundles(recipeId: string): Promise<BundleSummary[]> {
-  const r = await fetch(`${KREWHUB}/api/v1/recipes/${recipeId}/bundles`, {
+// ---------------------------------------------------------------------------
+// Invocation Contract — slice 5 frontend wiring
+// ---------------------------------------------------------------------------
+
+export type InvocationAction = 'accept' | 'decline' | 'cancel' | 'error'
+
+export interface ResultEnvelope {
+  action: InvocationAction
+  content?: string | Record<string, unknown> | null
+  reason?: string | null
+}
+
+export interface InvocationEvent {
+  tape_id: string
+  id: number
+  parent_id: number | null
+  fork_id: string | null
+  actor_type: 'brain' | 'sandbox' | 'human' | 'system'
+  actor_id: string
+  kind: string
+  body: string
+  payload: Record<string, unknown>
+  ts: string
+}
+
+export interface InvocationRecord {
+  id: string
+  target_type: string
+  target_id: string | null
+  input: string | Record<string, unknown>
+  schema: Record<string, unknown> | null
+  deadline_s: number
+  label: string | null
+  parent_tape_id: string | null
+  parent_fork_point: number | null
+  tape_id: string
+  status: 'pending' | 'running' | 'completed' | 'cancelled' | 'errored'
+  result: ResultEnvelope | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  created_by: string
+}
+
+export async function getInvocation(invocationId: string): Promise<InvocationRecord> {
+  const r = await fetch(`${KREWHUB}/api/v1/invocations/${invocationId}`, {
+    credentials: 'include',
+  })
+  if (!r.ok) throw makeError(`invocation_${r.status}`, undefined, r.status)
+  const body = await r.json()
+  // The route returns either {invocation: {...}, status, latest_event_id} or
+  // a flatter shape on older deployments. Normalize.
+  return (body.invocation ?? body) as InvocationRecord
+}
+
+export async function listInvocationEvents(
+  invocationId: string,
+  opts: { after?: number; limit?: number } = {},
+): Promise<InvocationEvent[]> {
+  const params = new URLSearchParams()
+  if (typeof opts.after === 'number') params.set('after', String(opts.after))
+  if (typeof opts.limit === 'number') params.set('limit', String(opts.limit))
+  const qs = params.toString()
+  const url = `${KREWHUB}/api/v1/invocations/${invocationId}/events${qs ? `?${qs}` : ''}`
+  const r = await fetch(url, { credentials: 'include' })
+  if (!r.ok) throw makeError(`events_${r.status}`, undefined, r.status)
+  const body = (await r.json()) as { events?: InvocationEvent[] }
+  return body.events ?? []
+}
+
+export async function submitInvocationResult(
+  invocationId: string,
+  envelope: ResultEnvelope,
+): Promise<void> {
+  const r = await fetch(`${KREWHUB}/api/v1/invocations/${invocationId}/result`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(envelope),
+  })
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}))
+    const detail = typeof body?.detail === 'string'
+      ? body.detail
+      : `invocation_result_${r.status}`
+    throw makeError(detail, undefined, r.status)
+  }
+}
+
+export async function cancelInvocation(invocationId: string): Promise<void> {
+  const r = await fetch(`${KREWHUB}/api/v1/invocations/${invocationId}/cancel`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!r.ok) {
+    throw makeError(`cancel_${r.status}`, undefined, r.status)
+  }
+}
+
+export async function listBundles(cookbookId: string): Promise<BundleSummary[]> {
+  const r = await fetch(`${KREWHUB}/api/v1/cookbooks/${cookbookId}/bundles`, {
     credentials: 'include',
   })
   if (!r.ok) throw makeError(`bundles_${r.status}`, undefined, r.status)
@@ -240,7 +403,7 @@ export async function listBundles(recipeId: string): Promise<BundleSummary[]> {
 }
 
 export async function createBundle(
-  recipeId: string,
+  cookbookId: string,
   prompt: string,
   opts: { autoplan?: boolean } = {},
 ): Promise<BundleSummary> {
@@ -249,13 +412,12 @@ export async function createBundle(
   // wants a blank board to drop tasks onto, not an LLM-generated
   // graph. Only orchestrator-mode flows that explicitly want
   // PlannerDispatchController to fire pass autoplan: true.
-  const r = await fetch(`${KREWHUB}/api/v1/recipes/${recipeId}/bundles`, {
+  const r = await fetch(`${KREWHUB}/api/v1/cookbooks/${cookbookId}/bundles`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       prompt,
-      requested_by: 'cookrew-beta',
       tasks: [],
       autoplan: !!opts.autoplan,
     }),
