@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { MobileApp } from './app/MobileApp'
 import { AuthProvider } from './lib/auth/useAuth'
 import './styles/tokens.css'
+import './styles/agent-html.css'
 
 const rootEl = document.getElementById('root')
 if (!rootEl) {

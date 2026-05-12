@@ -7,6 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
+import { AgentHtml } from './atoms/agent-html'
 import type { ResultEnvelope } from '../lib/api/krewhub-client'
 import type { PendingElicit } from '../lib/api/invocation-stream'
 
@@ -142,12 +143,13 @@ export function CrInvocationElicitPopout({
             <span className="cr-kicker" style={{ fontSize: 8, color: accent }}>
               QUESTION
             </span>
-            <div style={{
-              fontFamily: 'Inter,sans-serif', fontSize: 14,
-              color: 'var(--ink)', lineHeight: 1.4, whiteSpace: 'pre-wrap',
-            }}>
-              {item.message || '(no message)'}
-            </div>
+            <AgentHtml
+              html={item.message || '<em>(no message)</em>'}
+              style={{
+                fontFamily: 'Inter,sans-serif', fontSize: 14,
+                color: 'var(--ink)', lineHeight: 1.4,
+              }}
+            />
           </div>
 
           {hasSchema ? (

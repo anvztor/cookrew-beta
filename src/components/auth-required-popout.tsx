@@ -18,6 +18,7 @@
 
 import { useEffect, useState } from 'react'
 
+import { AgentHtml } from './atoms/agent-html'
 import type { PendingElicit } from '../lib/api/invocation-stream'
 
 
@@ -194,9 +195,11 @@ export function CrAuthRequiredPopout({
 
         <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {reason && (
-            <div className="cr-mono" style={{ fontSize: 11, lineHeight: 1.4 }}>
-              {reason}
-            </div>
+            <AgentHtml
+              html={reason}
+              className="cr-mono"
+              style={{ fontSize: 11, lineHeight: 1.4 }}
+            />
           )}
           <div className="cr-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>
             The brain hit an authentication failure. {supportsOAuth
