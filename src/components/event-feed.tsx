@@ -16,7 +16,11 @@ import {
   type CSSProperties,
 } from 'react'
 import { useRecipeStream, type RecipeEvent } from '../lib/api/recipe-stream'
-import { appendTaskFollowup } from '../lib/api/krewhub-client'
+import {
+  appendTaskFollowup,
+  getTaskEvents,
+  type TaskHistoryEvent,
+} from '../lib/api/krewhub-client'
 import type { Variant } from './party-sidebar'
 
 interface CrEventFeedProps {
@@ -83,12 +87,42 @@ export function CrEventFeed({
     return out
   }, [allEvents, filter, focusTaskId])
 
+  // ── Task history (focused mode) ──────────────────────────────
+  // When the operator focuses a task, fetch the full event tape so the
+  // feed renders the entire conversation (thinking / tool_use /
+  // tool_result / agent_reply / human_followup), not just events from
+  // the moment of subscription. Re-fetches when live events for this
+  // task land — keeps history in sync as the agent keeps working.
+  const [history, setHistory] = useState<TaskHistoryEvent[]>([])
+  const liveTaskEventCount = useMemo(
+    () => (focusTaskId ? allEvents.filter((e) => e.taskId === focusTaskId).length : 0),
+    [allEvents, focusTaskId],
+  )
+  useEffect(() => {
+    let cancelled = false
+    if (!focusTaskId) {
+      setHistory([])
+      return
+    }
+    void (async () => {
+      try {
+        const { events: rows } = await getTaskEvents(focusTaskId, { limit: 400 })
+        if (!cancelled) setHistory(rows)
+      } catch {
+        if (!cancelled) setHistory([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [focusTaskId, liveTaskEventCount])
+
   // Auto-scroll to newest line on every push.
   const scrollRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [events.length])
+  }, [events.length, history.length])
 
   // Reply composer state — visible only when a focused task is set.
   // Threads onto the existing task's tape via POST /tasks/{id}/followup.
@@ -249,80 +283,109 @@ export function CrEventFeed({
         className="cr-scroll"
         style={{ flex: 1, overflowY: 'auto', padding: '6px 10px', fontSize: 14, lineHeight: 1.4 }}
       >
-        {events.length === 0 && (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 4,
-              padding: '8px 0',
-              color: 'var(--phos-dim)',
-              fontFamily: 'JetBrains Mono, monospace',
-              fontSize: 12,
-            }}
-          >
-            <div>// SSE channel · open · idle</div>
-            {focusTaskId ? (
-              <div>// awaiting events for this task…</div>
-            ) : filter !== ALL ? (
-              <div>// no events from {filter} yet</div>
-            ) : (
-              <div>// awaiting backend events for this recipe</div>
-            )}
-          </div>
-        )}
-        {events.map((e) => (
-          <div
-            key={e.id}
-            style={{ display: 'flex', gap: 6, padding: '2px 0', alignItems: 'flex-start' }}
-          >
-            <span
-              className="cr-phos-dim"
-              style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, flexShrink: 0 }}
+        {(() => {
+          // When focused: render the full task tape (mapped to the
+          // same RecipeEvent shape) so we get one consistent renderer.
+          // Otherwise: render live recipe events as today.
+          const rows: readonly RecipeEvent[] = focusTaskId
+            ? history.map(historyToRow)
+            : events
+          if (rows.length === 0) {
+            return (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  padding: '8px 0',
+                  color: 'var(--phos-dim)',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 12,
+                }}
+              >
+                <div>// SSE channel · open · idle</div>
+                {focusTaskId ? (
+                  <div>// loading task tape…</div>
+                ) : filter !== ALL ? (
+                  <div>// no events from {filter} yet</div>
+                ) : (
+                  <div>// awaiting backend events for this recipe</div>
+                )}
+              </div>
+            )
+          }
+          return rows.map((e) => (
+            <div
+              key={e.id}
+              style={{ display: 'flex', gap: 6, padding: '2px 0', alignItems: 'flex-start' }}
             >
-              {e.t}
-            </span>
-            <span
-              className="cr-phos-hi"
-              style={{
-                fontFamily: 'Silkscreen, monospace',
-                fontSize: 9,
-                flexShrink: 0,
-                paddingTop: 1,
-                maxWidth: 110,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              [{e.agent}]
-            </span>
-            <span
-              className="cr-phos-dim"
-              style={{
-                fontFamily: 'JetBrains Mono, monospace',
-                fontSize: 10,
-                flexShrink: 0,
-                paddingTop: 2,
-              }}
-            >
-              {e.kind}
-            </span>
-            <span
-              style={{
-                flex: 1,
-                color:
-                  e.kind === 'sse.error'
-                    ? 'var(--rose)'
-                    : e.kind.endsWith('.completed') || e.kind.endsWith('.cooked')
-                      ? 'var(--phos-glow)'
-                      : 'var(--phos)',
-              }}
-            >
-              {e.msg}
-            </span>
-          </div>
-        ))}
+              <span
+                className="cr-phos-dim"
+                style={{
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 11,
+                  flexShrink: 0,
+                }}
+              >
+                {e.t}
+              </span>
+              <span
+                className="cr-phos-hi"
+                style={{
+                  fontFamily: 'Silkscreen, monospace',
+                  fontSize: 9,
+                  flexShrink: 0,
+                  paddingTop: 1,
+                  maxWidth: 110,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  color: e.agent === 'human' ? 'var(--cyan, #38BDF8)' : undefined,
+                }}
+              >
+                [{e.agent}]
+              </span>
+              <span
+                className="cr-phos-dim"
+                style={{
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 10,
+                  flexShrink: 0,
+                  paddingTop: 2,
+                }}
+              >
+                {e.kind}
+              </span>
+              <span
+                style={{
+                  flex: 1,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  fontFamily:
+                    e.kind === 'tool_result' || e.kind === 'tool_use'
+                      ? 'JetBrains Mono, monospace'
+                      : undefined,
+                  fontSize: e.kind === 'tool_result' ? 12 : undefined,
+                  fontStyle: e.kind === 'thinking' ? 'italic' : undefined,
+                  color:
+                    e.kind === 'sse.error'
+                      ? 'var(--rose)'
+                      : e.agent === 'human'
+                        ? 'var(--cyan, #38BDF8)'
+                        : e.kind === 'agent_reply' || e.kind === 'milestone'
+                          ? 'var(--phos-glow)'
+                          : e.kind === 'thinking'
+                            ? 'var(--phos-dim)'
+                            : e.kind.endsWith('.completed') || e.kind.endsWith('.cooked')
+                              ? 'var(--phos-glow)'
+                              : 'var(--phos)',
+                }}
+              >
+                {e.msg}
+              </span>
+            </div>
+          ))
+        })()}
         {focusTaskId ? (
           <form
             onSubmit={(e) => {
@@ -398,4 +461,34 @@ export function CrEventFeed({
       </div>
     </div>
   )
+}
+
+// Convert TaskHistoryEvent → RecipeEvent so the existing row renderer
+// shows the full task tape. `msg` carries the unfiltered body text so
+// the row's flex:1 column wraps it across multiple lines — no
+// truncation. `agent` discriminates human follow-ups so the existing
+// tab logic surfaces them.
+function fmtClock(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso.slice(11, 19)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+function historyToRow(row: TaskHistoryEvent): RecipeEvent {
+  const inner = row.payload || {}
+  const text =
+    (typeof inner.text === 'string' && (inner.text as string)) ||
+    (typeof inner.output === 'string' && (inner.output as string)) ||
+    (typeof inner.content === 'string' && (inner.content as string)) ||
+    row.body ||
+    ''
+  return {
+    id: row.id,
+    t: fmtClock(row.created_at),
+    agent: row.actor_type === 'human' ? 'human' : row.actor_id || 'SYSTEM',
+    taskId: undefined,
+    kind: row.type,
+    msg: text,
+  }
 }

@@ -118,6 +118,49 @@ export async function appendTaskFollowup(
 }
 
 
+export interface TaskHistoryEvent {
+  id: string
+  type: string
+  actor_id: string
+  actor_type: 'human' | 'agent' | 'system' | 'hook'
+  body: string
+  payload: Record<string, unknown>
+  sequence: number
+  created_at: string
+}
+
+export async function getTaskEvents(
+  taskId: string,
+  opts: { limit?: number; sinceSeq?: number } = {},
+): Promise<{ task_id: string; events: TaskHistoryEvent[]; count: number }> {
+  const u = new URL(`${KREWHUB}/api/v1/tasks/${taskId}/events`)
+  if (opts.limit) u.searchParams.set('limit', String(opts.limit))
+  if (typeof opts.sinceSeq === 'number') u.searchParams.set('since_seq', String(opts.sinceSeq))
+  const r = await fetch(u.toString(), { credentials: 'include' })
+  if (!r.ok) throw makeError(`task_events_${r.status}`, undefined, r.status)
+  return r.json()
+}
+
+export async function getTaskLastHumanInput(
+  taskId: string,
+): Promise<{ task_id: string; kind: 'human_followup' | 'bundle_prompt' | 'none'; text: string; created_at: string | null }> {
+  const r = await fetch(`${KREWHUB}/api/v1/tasks/${taskId}/last-human-input`, {
+    credentials: 'include',
+  })
+  if (!r.ok) throw makeError(`task_last_human_${r.status}`, undefined, r.status)
+  return r.json()
+}
+
+export async function getTaskLastReply(
+  taskId: string,
+): Promise<{ task_id: string; kind: 'agent_reply' | 'milestone' | 'none'; html: string; created_at: string | null }> {
+  const r = await fetch(`${KREWHUB}/api/v1/tasks/${taskId}/last-reply`, {
+    credentials: 'include',
+  })
+  if (!r.ok) throw makeError(`task_last_reply_${r.status}`, undefined, r.status)
+  return r.json()
+}
+
 export function streamTask(taskId: string): EventSource {
   return new EventSource(
     `${KREWHUB}/api/v1/tasks/${taskId}/stream`,

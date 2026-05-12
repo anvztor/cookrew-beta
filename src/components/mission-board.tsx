@@ -15,6 +15,7 @@ import { FeedDot } from './atoms/feed-dot'
 import { CR_STATUS, type HitlItem, type Task } from '../data/tasks'
 import type { Variant } from './party-sidebar'
 import { CrBundleTabs, type Bundle } from './bundle-tabs'
+import { getTaskLastHumanInput } from '../lib/api/krewhub-client'
 
 interface CrTaskLiveCardProps {
   t: Task
@@ -45,6 +46,29 @@ export function CrTaskLiveCard({
   const isWorking = t.status === 'working' && !isBlocked && !isCooked
 
   const st = CR_STATUS[isCooked ? 'cooked' : isBlocked ? 'blocked' : t.status]
+
+  // Latest operator instruction for this task — task.title is the
+  // initial bundle prompt, so only override it when a follow-up
+  // exists. Lazy per-card fetch is fine: ~10 tiles per bundle and the
+  // endpoint is a single indexed lookup.
+  const [followup, setFollowup] = useState<string | null>(null)
+  useEffect(() => {
+    if (isDraft || !t.id) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const r = await getTaskLastHumanInput(t.id)
+        if (!cancelled && r.kind === 'human_followup' && r.text.trim()) {
+          setFollowup(r.text)
+        }
+      } catch {
+        // ignore — fall back to task.title
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [t.id, isDraft])
 
   if (isOrch) {
     const phase = t.orchPhase || 'thinking'
@@ -285,6 +309,37 @@ export function CrTaskLiveCard({
       >
         {t.title || (isDraft ? 'New quest' : '')}
       </div>
+      {followup && (
+        <div
+          className="cr-mono"
+          style={{
+            display: 'flex',
+            gap: 4,
+            fontSize: 10,
+            color: 'var(--ink-soft)',
+            background: 'rgba(56,189,248,0.06)',
+            border: '1px dashed rgba(56,189,248,0.35)',
+            padding: '3px 6px',
+            lineHeight: 1.35,
+            maxHeight: 36,
+            overflow: 'hidden',
+          }}
+          title={followup}
+        >
+          <span style={{ color: '#0369A1', fontWeight: 700 }}>&gt;</span>
+          <span
+            style={{
+              flex: 1,
+              overflow: 'hidden',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+            }}
+          >
+            {followup}
+          </span>
+        </div>
+      )}
       <div
         style={{
           display: 'flex',

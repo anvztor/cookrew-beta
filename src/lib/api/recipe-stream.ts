@@ -71,10 +71,10 @@ function summarise(eventName: string, payload: Record<string, unknown>): EventSl
       asString(inner.output) ||
       asString(payload.body) ||
       type
-    // High cap with explicit ellipsis to catch runaway output without
-    // lopping off useful context. The feed row uses flex: 1 + natural
-    // wrapping, so long messages render across multiple lines cleanly.
-    const MAX_FEED_CHARS = 600
+    // Show the full text — the feed row uses flex:1 + pre-wrap so long
+    // bodies render across multiple lines cleanly. Cap is paranoia
+    // only (4 KB) to bound DOM size for runaway agents.
+    const MAX_FEED_CHARS = 4000
     const head =
       innerText.length > MAX_FEED_CHARS
         ? innerText.slice(0, MAX_FEED_CHARS - 1) + '…'
@@ -82,7 +82,7 @@ function summarise(eventName: string, payload: Record<string, unknown>): EventSl
     return {
       agent: actor,
       taskId,
-      msg: `${type} · ${head}`,
+      msg: head,
     }
   }
 
