@@ -329,64 +329,54 @@ export function CrEventFeed({
               e.preventDefault()
               void submitReply()
             }}
+            onClick={() => inputRef.current?.focus()}
+            className="cr-phos-hi"
             style={{
-              marginTop: 6,
+              marginTop: 4,
               display: 'flex',
               alignItems: 'baseline',
-              gap: 6,
               fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 14,
+              cursor: 'text',
             }}
           >
-            <span className="cr-phos-hi" style={{ fontSize: 14 }}>
-              {'>'}
-            </span>
+            <span style={{ whiteSpace: 'pre' }}>{'> '}</span>
             <input
               ref={inputRef}
               type="text"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               disabled={sending}
-              placeholder="reply…"
               spellCheck={false}
               autoComplete="off"
+              aria-label="reply to task"
               style={{
                 flex: 1,
+                minWidth: 1,
                 background: 'transparent',
                 border: 'none',
                 outline: 'none',
                 fontFamily: 'JetBrains Mono, monospace',
                 fontSize: 14,
-                color: 'var(--phos-glow)',
-                textShadow: '0 0 4px rgba(74,222,128,.35)',
+                color: 'var(--phos-hi)',
+                textShadow: 'inherit',
                 padding: 0,
-                caretColor: 'var(--phos-glow)',
+                margin: 0,
+                caretColor: 'var(--phos-hi)',
               }}
             />
             {!draft && !sending && (
               <span
                 aria-hidden
-                className="cr-phos-hi"
                 style={{
                   animation: 'cr-blink 0.7s step-end infinite',
-                  marginLeft: -6,
+                  marginLeft: -8,
                   pointerEvents: 'none',
-                  fontSize: 14,
                 }}
               >
                 ▮
               </span>
             )}
-            <span
-              className="cr-phos-dim"
-              style={{
-                fontFamily: 'Silkscreen, monospace',
-                fontSize: 8,
-                letterSpacing: 0.6,
-                flexShrink: 0,
-              }}
-            >
-              {sending ? 'SENDING…' : 'ENTER'}
-            </span>
           </form>
         ) : (
           <div className="cr-phos-hi" style={{ marginTop: 4 }}>
