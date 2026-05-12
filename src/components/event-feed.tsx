@@ -16,6 +16,7 @@ import {
   type CSSProperties,
 } from 'react'
 import { useRecipeStream, type RecipeEvent } from '../lib/api/recipe-stream'
+import { appendTaskFollowup } from '../lib/api/krewhub-client'
 import type { Variant } from './party-sidebar'
 
 interface CrEventFeedProps {
@@ -88,6 +89,36 @@ export function CrEventFeed({
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [events.length])
+
+  // Reply composer state — visible only when a focused task is set.
+  // Threads onto the existing task's tape via POST /tasks/{id}/followup.
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [replyNote, setReplyNote] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  // Focus the composer whenever a new task comes into focus so the
+  // operator can just start typing.
+  useEffect(() => {
+    if (focusTaskId) inputRef.current?.focus()
+  }, [focusTaskId])
+  const submitReply = async () => {
+    const text = draft.trim()
+    if (!text || !focusTaskId || sending) return
+    setSending(true)
+    setReplyNote(null)
+    try {
+      const { status_flipped } = await appendTaskFollowup(focusTaskId, text)
+      setDraft('')
+      setReplyNote({
+        kind: 'ok',
+        msg: status_flipped ? 'sent · task reopened' : 'sent',
+      })
+    } catch (e) {
+      setReplyNote({ kind: 'err', msg: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setSending(false)
+    }
+  }
 
   const btnStyle: CSSProperties = {
     background: 'transparent',
@@ -292,9 +323,88 @@ export function CrEventFeed({
             </span>
           </div>
         ))}
-        <div className="cr-phos-hi" style={{ marginTop: 4 }}>
-          {'>'} <span style={{ animation: 'cr-blink 0.7s step-end infinite' }}>▮</span>
-        </div>
+        {focusTaskId ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submitReply()
+            }}
+            style={{
+              marginTop: 6,
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 6,
+              fontFamily: 'JetBrains Mono, monospace',
+            }}
+          >
+            <span className="cr-phos-hi" style={{ fontSize: 14 }}>
+              {'>'}
+            </span>
+            <input
+              ref={inputRef}
+              type="text"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              disabled={sending}
+              placeholder="reply…"
+              spellCheck={false}
+              autoComplete="off"
+              style={{
+                flex: 1,
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                fontFamily: 'JetBrains Mono, monospace',
+                fontSize: 14,
+                color: 'var(--phos-glow)',
+                textShadow: '0 0 4px rgba(74,222,128,.35)',
+                padding: 0,
+                caretColor: 'var(--phos-glow)',
+              }}
+            />
+            {!draft && !sending && (
+              <span
+                aria-hidden
+                className="cr-phos-hi"
+                style={{
+                  animation: 'cr-blink 0.7s step-end infinite',
+                  marginLeft: -6,
+                  pointerEvents: 'none',
+                  fontSize: 14,
+                }}
+              >
+                ▮
+              </span>
+            )}
+            <span
+              className="cr-phos-dim"
+              style={{
+                fontFamily: 'Silkscreen, monospace',
+                fontSize: 8,
+                letterSpacing: 0.6,
+                flexShrink: 0,
+              }}
+            >
+              {sending ? 'SENDING…' : 'ENTER'}
+            </span>
+          </form>
+        ) : (
+          <div className="cr-phos-hi" style={{ marginTop: 4 }}>
+            {'>'} <span style={{ animation: 'cr-blink 0.7s step-end infinite' }}>▮</span>
+          </div>
+        )}
+        {replyNote && (
+          <div
+            style={{
+              marginTop: 4,
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 11,
+              color: replyNote.kind === 'err' ? 'var(--rose)' : 'var(--phos-glow)',
+            }}
+          >
+            // {replyNote.msg}
+          </div>
+        )}
       </div>
     </div>
   )
