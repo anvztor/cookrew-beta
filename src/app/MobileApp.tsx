@@ -10,6 +10,7 @@ import { HireAgentRuntimeModal } from '../components/auth-view/hire-agent-runtim
 import { CrHITLPopout } from '../components/hitl-popout'
 import { CrInvocationElicitPopout } from '../components/invocation-elicit-popout'
 import { CrAuthRequiredPopout } from '../components/auth-required-popout'
+import { CrTaskReviewPopout } from '../components/task-review-popout'
 import {
   usePendingElicits,
   type PendingElicit,
@@ -209,6 +210,9 @@ export function MobileApp() {
   const [toast, setToast] = useState<string | null>(null)
   const [formatTick] = useState(0)
   const [hitlOpen, setHitlOpen] = useState<HitlItem | null>(null)
+  // DONE / cooked task review popout — opened on tap of a finished task.
+  // Fetches the brain's final reply for that task and renders as HTML.
+  const [reviewTask, setReviewTask] = useState<Task | null>(null)
   const [elicitOpen, setElicitOpen] = useState<PendingElicit | null>(null)
   // Auto-surface invocation-style HITL events from the recipe stream.
   const pendingElicits = usePendingElicits(recipeId || undefined)
@@ -704,6 +708,8 @@ export function MobileApp() {
   }
 
   const onSelectTask = (t: Task) => {
+    // BLOCKED state — open the HITL popout (handled by setHitlOpen below
+    // OR by the elicit-popout if the task has a pending invocation).
     if (t.hitl === 'needs_input') {
       const list = deriveHitl(tasks)
       const it = list.find((h) => h.taskId === t.id)
@@ -712,16 +718,24 @@ export function MobileApp() {
         return
       }
     }
+    // DRAFT state — fall back into the prompt composer.
     if (t.status === 'draft') {
       setDraftId(t.id)
       setPrompt(t.title || '')
       setMode('assign')
       return
     }
-    // Any non-draft, non-hitl task: pop the event feed open and focus
-    // it on this task's agent. Even if the agent hasn't claimed yet
-    // (agentId undefined), opening the feed against the taskId is the
-    // useful default.
+    // DONE / cooked state — open the PLS_REVIEW popout. The brain's
+    // final reply (with diff, artifacts, explanation as HTML) is
+    // fetched inside CrTaskReviewPopout via /tasks/{id}/last-reply.
+    if (t.status === 'done' || t.status === 'cooked') {
+      setReviewTask(t)
+      return
+    }
+    // IN PROGRESS state (working / open / queued / orch) — slide out
+    // the event feed and focus on this task. Even if the agent hasn't
+    // claimed yet (agentId undefined), opening the feed against the
+    // taskId is the useful default.
     setFocusedTask({ taskId: t.id, agentId: t.agentId })
     setPartyOpen(false)
     setFeedOpen(true)
@@ -937,6 +951,17 @@ export function MobileApp() {
                 )
               })
           }}
+        />
+      )}
+
+      {/* PLS_REVIEW card for DONE / cooked tasks. Opens via onSelectTask
+          when the operator taps a finished task. CrTaskReviewPopout
+          fetches the brain's last_reply on its own and renders the
+          body (diff + artifacts + explanation) as sanitized HTML. */}
+      {reviewTask && (
+        <CrTaskReviewPopout
+          task={reviewTask}
+          onClose={() => setReviewTask(null)}
         />
       )}
 
