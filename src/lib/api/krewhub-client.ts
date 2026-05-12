@@ -170,7 +170,7 @@ export function streamTask(taskId: string): EventSource {
 
 export interface BundleSummary {
   id: string
-  recipe_id: string
+  cookbook_id: string
   prompt: string | null
   status: string
   created_by: string
@@ -198,25 +198,16 @@ export async function getBundle(bundleId: string): Promise<BundleDetail | null> 
   return r.json()
 }
 
-// ── Cookbooks / recipes ────────────────────────────────────────
+// ── Cookbooks ──────────────────────────────────────────────────
 // Each user gets per-account cookbooks via `krewcli login`'s
-// auto-bootstrap (creates "my-cookbook" + "my-recipe" if absent).
-// The SPA discovers them on load instead of relying on a hardcoded
-// recipe ID — that approach broke for any user who didn't happen to
-// own the build-time-baked recipe.
+// auto-bootstrap (creates "my-cookbook" if absent). The SPA discovers
+// the active cookbook on load — recipes were retired in
+// anvztor/krewhub#1, so cookbook is now the bundle's parent scope.
 
 export interface Cookbook {
   id: string
   name: string
   owner_id: string | null
-  created_at: string
-}
-
-export interface Recipe {
-  id: string
-  name: string
-  cookbook_id: string
-  created_by: string
   created_at: string
 }
 
@@ -231,7 +222,6 @@ export async function listCookbooks(ownerId?: string): Promise<Cookbook[]> {
 
 export async function getCookbookDetail(cookbookId: string): Promise<{
   cookbook: Cookbook
-  recipes: Recipe[]
 }> {
   const r = await fetch(`${KREWHUB}/api/v1/cookbooks/${cookbookId}`, {
     credentials: 'include',
@@ -241,42 +231,37 @@ export async function getCookbookDetail(cookbookId: string): Promise<{
 }
 
 /**
- * Resolve the current user's "active" recipe.
+ * Resolve the current user's "active" cookbook.
  *
  * Strategy:
- *   1. localStorage cache (krewhub_active_recipe_id) — survives reloads.
- *   2. First owned cookbook → first recipe inside it.
+ *   1. localStorage cache (krewhub_active_cookbook_id) — survives reloads.
+ *   2. First owned cookbook from /api/v1/cookbooks.
  *   3. POST /api/v1/me/init-workspace — server bootstraps a default
- *      cookbook + recipe for first-time web users who haven't run
+ *      cookbook for first-time web users who haven't run
  *      `krewcli login` on their machine yet. Idempotent.
  *   4. null when even init failed (network blip; UI surfaces a toast).
  */
-export async function resolveActiveRecipeId(
+export async function resolveActiveCookbookId(
   accountId: string,
 ): Promise<string | null> {
-  const cached = localStorage.getItem('krewhub_active_recipe_id')
+  const cached = localStorage.getItem('krewhub_active_cookbook_id')
   if (cached) return cached
   const cookbooks = await listCookbooks(accountId)
   if (cookbooks.length > 0) {
-    const detail = await getCookbookDetail(cookbooks[0].id)
-    const recipe = detail.recipes[0]
-    if (recipe) {
-      localStorage.setItem('krewhub_active_recipe_id', recipe.id)
-      return recipe.id
-    }
+    localStorage.setItem('krewhub_active_cookbook_id', cookbooks[0].id)
+    return cookbooks[0].id
   }
   // No cookbook yet → server-side bootstrap.
   const init = await initWorkspace().catch(() => null)
   if (init) {
-    localStorage.setItem('krewhub_active_recipe_id', init.recipe.id)
-    return init.recipe.id
+    localStorage.setItem('krewhub_active_cookbook_id', init.cookbook.id)
+    return init.cookbook.id
   }
   return null
 }
 
 export interface InitWorkspaceResult {
   cookbook: Cookbook
-  recipe: Recipe
 }
 
 export async function initWorkspace(): Promise<InitWorkspaceResult> {
@@ -408,8 +393,8 @@ export async function cancelInvocation(invocationId: string): Promise<void> {
   }
 }
 
-export async function listBundles(recipeId: string): Promise<BundleSummary[]> {
-  const r = await fetch(`${KREWHUB}/api/v1/recipes/${recipeId}/bundles`, {
+export async function listBundles(cookbookId: string): Promise<BundleSummary[]> {
+  const r = await fetch(`${KREWHUB}/api/v1/cookbooks/${cookbookId}/bundles`, {
     credentials: 'include',
   })
   if (!r.ok) throw makeError(`bundles_${r.status}`, undefined, r.status)
@@ -418,7 +403,7 @@ export async function listBundles(recipeId: string): Promise<BundleSummary[]> {
 }
 
 export async function createBundle(
-  recipeId: string,
+  cookbookId: string,
   prompt: string,
   opts: { autoplan?: boolean } = {},
 ): Promise<BundleSummary> {
@@ -427,13 +412,12 @@ export async function createBundle(
   // wants a blank board to drop tasks onto, not an LLM-generated
   // graph. Only orchestrator-mode flows that explicitly want
   // PlannerDispatchController to fire pass autoplan: true.
-  const r = await fetch(`${KREWHUB}/api/v1/recipes/${recipeId}/bundles`, {
+  const r = await fetch(`${KREWHUB}/api/v1/cookbooks/${cookbookId}/bundles`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       prompt,
-      requested_by: 'cookrew-beta',
       tasks: [],
       autoplan: !!opts.autoplan,
     }),

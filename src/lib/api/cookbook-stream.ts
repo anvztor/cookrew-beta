@@ -1,7 +1,7 @@
-// Real SSE feed for a recipe.
+// Real SSE feed for a cookbook.
 //
-// Subscribes to `GET /api/v1/recipes/{recipe_id}/stream` and converts the
-// typed SSE events into display rows. Replaces the in-process event-bus
+// Subscribes to `GET /api/v1/cookbooks/{cookbook_id}/stream` and converts
+// the typed SSE events into display rows. Replaces the in-process event-bus
 // frontend narration: every line in the EventFeed below now corresponds
 // to a real backend mutation.
 
@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 const KREWHUB =
   (import.meta.env.VITE_KREWHUB_URL as string | undefined) ?? 'http://localhost:8420'
 
-export interface RecipeEvent {
+export interface CookbookEvent {
   /** Stable id for keying React lists — synthesized client-side. */
   id: string
   /** HH:MM:SS for display. */
@@ -176,18 +176,18 @@ const KNOWN_EVENT_TYPES = [
   'ping',
 ]
 
-export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
-  const [events, setEvents] = useState<RecipeEvent[]>([])
+export function useCookbookStream(cookbookId: string | undefined): CookbookEvent[] {
+  const [events, setEvents] = useState<CookbookEvent[]>([])
   const seqRef = useRef(0)
 
   useEffect(() => {
-    if (!recipeId) return
-    const url = `${KREWHUB}/api/v1/recipes/${recipeId}/stream`
+    if (!cookbookId) return
+    const url = `${KREWHUB}/api/v1/cookbooks/${cookbookId}/stream`
     const es = new EventSource(url, { withCredentials: true })
 
     const appendSynthetic = (kind: string, msg: string) => {
       seqRef.current += 1
-      const ev: RecipeEvent = {
+      const ev: CookbookEvent = {
         id: `${kind}_${seqRef.current}_${Date.now()}`,
         t: nowStamp(),
         agent: 'SYSTEM',
@@ -212,7 +212,7 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
       }
       const slots = summarise(eventName, payload)
       seqRef.current += 1
-      const ev: RecipeEvent = {
+      const ev: CookbookEvent = {
         id: `sse_${seqRef.current}_${Date.now()}`,
         t: nowStamp(),
         agent: slots.agent,
@@ -226,7 +226,7 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
       })
     }
 
-    es.onopen = () => appendSynthetic('sse.open', 'recipe stream connected')
+    es.onopen = () => appendSynthetic('sse.open', 'cookbook stream connected')
 
     const listeners: Record<string, (e: MessageEvent) => void> = {}
     KNOWN_EVENT_TYPES.forEach((t) => {
@@ -250,7 +250,7 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
       Object.entries(listeners).forEach(([t, fn]) => es.removeEventListener(t, fn))
       es.close()
     }
-  }, [recipeId])
+  }, [cookbookId])
 
   return events
 }

@@ -1,7 +1,7 @@
 // CrEventFeed — phosphor-CRT log of REAL backend events, tabbed by agent.
 //
-// Subscribes to `GET /api/v1/recipes/{recipe_id}/stream` (SSE) via
-// useRecipeStream. Tabs are agent identities (e.g. `echo@krew`) plus
+// Subscribes to `GET /api/v1/cookbooks/{cookbook_id}/stream` (SSE) via
+// useCookbookStream. Tabs are agent identities (e.g. `echo@krew`) plus
 // ALL and SYSTEM. When the user clicks an assigned task on the
 // mission board, MobileApp passes `focusTaskId` + `focusAgentId`
 // here: the feed pre-selects that agent's tab and filters to events
@@ -15,7 +15,7 @@ import {
   useState,
   type CSSProperties,
 } from 'react'
-import { useRecipeStream, type RecipeEvent } from '../lib/api/recipe-stream'
+import { useCookbookStream, type CookbookEvent } from '../lib/api/cookbook-stream'
 import {
   appendTaskFollowup,
   getTaskEvents,
@@ -26,8 +26,8 @@ import type { Variant } from './party-sidebar'
 interface CrEventFeedProps {
   variant?: Variant
   onClose?: () => void
-  /** Recipe whose live event stream feeds this panel. */
-  recipeId?: string
+  /** Cookbook whose live event stream feeds this panel. */
+  cookbookId?: string
   /** Pre-select this agent's tab on open (set by task-click). */
   focusAgentId?: string
   /** Filter events to a single task on open (set by task-click). */
@@ -40,11 +40,11 @@ const SYSTEM = 'SYSTEM'
 export function CrEventFeed({
   variant = 'desktop',
   onClose,
-  recipeId,
+  cookbookId,
   focusAgentId,
   focusTaskId,
 }: CrEventFeedProps) {
-  const allEvents = useRecipeStream(recipeId)
+  const allEvents = useCookbookStream(cookbookId)
   const isMobile = variant === 'mobile'
 
   // The active tab is `filter` — defaults to whatever focusAgentId says
@@ -76,8 +76,8 @@ export function CrEventFeed({
   }, [allEvents, focusAgentId])
 
   // Filter pipeline: agent tab + (optional) per-task focus.
-  const events = useMemo<readonly RecipeEvent[]>(() => {
-    let out: readonly RecipeEvent[] = allEvents
+  const events = useMemo<readonly CookbookEvent[]>(() => {
+    let out: readonly CookbookEvent[] = allEvents
     if (focusTaskId) {
       out = out.filter((e) => e.taskId === focusTaskId)
     }
@@ -207,7 +207,7 @@ export function CrEventFeed({
             color: 'var(--phos-dim)',
           }}
         >
-          {events.length} TRACED · recipe {recipeId ? recipeId.slice(0, 14) : '—'}
+          {events.length} TRACED · cookbook {cookbookId ? cookbookId.slice(0, 14) : '—'}
         </span>
         {onClose && (
           <button onClick={onClose} style={btnStyle}>
@@ -285,9 +285,9 @@ export function CrEventFeed({
       >
         {(() => {
           // When focused: render the full task tape (mapped to the
-          // same RecipeEvent shape) so we get one consistent renderer.
-          // Otherwise: render live recipe events as today.
-          const rows: readonly RecipeEvent[] = focusTaskId
+          // same CookbookEvent shape) so we get one consistent renderer.
+          // Otherwise: render live cookbook events as today.
+          const rows: readonly CookbookEvent[] = focusTaskId
             ? history.map(historyToRow)
             : events
           if (rows.length === 0) {
@@ -309,7 +309,7 @@ export function CrEventFeed({
                 ) : filter !== ALL ? (
                   <div>// no events from {filter} yet</div>
                 ) : (
-                  <div>// awaiting backend events for this recipe</div>
+                  <div>// awaiting backend events for this cookbook</div>
                 )}
               </div>
             )
@@ -479,7 +479,7 @@ export function CrEventFeed({
   )
 }
 
-// Convert TaskHistoryEvent → RecipeEvent so the existing row renderer
+// Convert TaskHistoryEvent → CookbookEvent so the existing row renderer
 // shows the full task tape. `msg` carries the unfiltered body text so
 // the row's flex:1 column wraps it across multiple lines — no
 // truncation. `agent` discriminates human follow-ups so the existing
@@ -491,7 +491,7 @@ function fmtClock(iso: string): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-function historyToRow(row: TaskHistoryEvent): RecipeEvent {
+function historyToRow(row: TaskHistoryEvent): CookbookEvent {
   const inner = row.payload || {}
   const text =
     (typeof inner.text === 'string' && (inner.text as string)) ||

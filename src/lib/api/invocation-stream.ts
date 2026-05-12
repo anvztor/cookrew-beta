@@ -4,8 +4,8 @@
 //   • useInvocationStream(invocationId) — direct subscription to one
 //     invocation's events, used by the popout to refresh as the brain
 //     responds.
-//   • usePendingElicits(recipeId) — surfaces invocations across the
-//     recipe that emitted an `elicit` and haven't reached `done` yet.
+//   • usePendingElicits(cookbookId) — surfaces invocations across the
+//     cookbook that emitted an `elicit` and haven't reached `done` yet.
 //     Drives the operator's "hey, an agent is asking you something"
 //     awareness without polling.
 
@@ -67,7 +67,7 @@ export function useInvocationStream(
       setEvents((cur) => [...cur, parsed])
     }
     // The /invocations/:id/stream endpoint emits unnamed messages
-    // (default 'message' event). The recipe-scoped /watch endpoint
+    // (default 'message' event). The cookbook-scoped /watch endpoint
     // tags events with a channel — see usePendingElicits below.
     es.addEventListener('message', onMsg)
 
@@ -82,12 +82,12 @@ export function useInvocationStream(
 
 
 /**
- * Watch the recipe-scoped watch stream for invocation events whose
+ * Watch the cookbook-scoped watch stream for invocation events whose
  * kind is `elicit` and surface them as PendingElicit items. Removes an
  * item once the same tape emits `done` / `decision`.
  *
  * Backed by the existing /api/v1/watch endpoint with
- * resource_type=invocation&recipe_id=<recipe>.
+ * resource_type=invocation&cookbook_id=<cookbook>.
  *
  * Stale-elicit filter: invocations whose `deadline_ts` is already in
  * the past are dropped from the live list and re-checked every 15s.
@@ -96,7 +96,7 @@ export function useInvocationStream(
  * one times out behind it.
  */
 export function usePendingElicits(
-  recipeId: string | undefined,
+  cookbookId: string | undefined,
 ): PendingElicit[] {
   const [pending, setPending] = useState<Map<string, PendingElicit>>(new Map())
   // Sweep tick — bumps every 15s so React re-renders the filtered list
@@ -109,9 +109,9 @@ export function usePendingElicits(
 
   useEffect(() => {
     setPending(new Map())
-    if (!recipeId) return
+    if (!cookbookId) return
 
-    const url = `${KREWHUB}/api/v1/watch?resource_type=invocation&recipe_id=${encodeURIComponent(recipeId)}`
+    const url = `${KREWHUB}/api/v1/watch?resource_type=invocation&cookbook_id=${encodeURIComponent(cookbookId)}`
     const es = new EventSource(url, { withCredentials: true })
 
     const handle = (e: MessageEvent) => {
@@ -204,7 +204,7 @@ export function usePendingElicits(
       eventNames.forEach((n) => es.removeEventListener(n, handle))
       es.close()
     }
-  }, [recipeId])
+  }, [cookbookId])
 
   // Filter out invocations whose deadline_ts has passed. We can't
   // submit to an expired invocation anyway (the krewhub side will
