@@ -820,6 +820,11 @@ export function MobileApp() {
           onLinkTasks={linkTasks}
           formatTick={formatTick}
           onSelectTask={onSelectTask}
+          onShowFeed={(t) => {
+            setFocusedTask({ taskId: t.id, agentId: t.agentId })
+            setPartyOpen(false)
+            setFeedOpen(true)
+          }}
           onOpenHitl={(h) => setHitlOpen(h)}
         />
       </div>
@@ -892,6 +897,13 @@ export function MobileApp() {
           item={hitlOpen}
           task={tasks.find((t) => t.id === hitlOpen.taskId)}
           onClose={() => setHitlOpen(null)}
+          onShowFeed={() => {
+            const t = tasks.find((x) => x.id === hitlOpen.taskId)
+            setHitlOpen(null)
+            setFocusedTask({ taskId: hitlOpen.taskId, agentId: t?.agentId })
+            setPartyOpen(false)
+            setFeedOpen(true)
+          }}
           onSubmit={(payload) => {
             if (payload.kind !== 'answer') {
               setHitlOpen(null)

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import type { HitlItem, Task } from '../data/tasks'
+import { FeedDot } from './atoms/feed-dot'
 
 export type HitlSubmit =
   | { kind: 'answer'; text: string }
@@ -11,10 +12,11 @@ interface CrHITLPopoutProps {
   item: HitlItem | null
   task?: Task
   onClose?: () => void
+  onShowFeed?: () => void
   onSubmit?: (payload: HitlSubmit) => void
 }
 
-export function CrHITLPopout({ item, task, onClose, onSubmit }: CrHITLPopoutProps) {
+export function CrHITLPopout({ item, task, onClose, onShowFeed, onSubmit }: CrHITLPopoutProps) {
   const [answer, setAnswer] = useState('')
 
   useEffect(() => {
@@ -80,19 +82,22 @@ export function CrHITLPopout({ item, task, onClose, onSubmit }: CrHITLPopoutProp
               {tag}
             </span>
           </div>
-          <button
-            onClick={onClose}
-            className="cr-bevel"
-            style={{
-              padding: '2px 8px',
-              background: 'var(--cream-hi)',
-              fontFamily: 'Silkscreen,monospace',
-              fontSize: 9,
-              cursor: 'pointer',
-            }}
-          >
-            ESC ✕
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {onShowFeed && <FeedDot tone="rose" onClick={() => onShowFeed()} />}
+            <button
+              onClick={onClose}
+              className="cr-bevel"
+              style={{
+                padding: '2px 8px',
+                background: 'var(--cream-hi)',
+                fontFamily: 'Silkscreen,monospace',
+                fontSize: 9,
+                cursor: 'pointer',
+              }}
+            >
+              ESC ✕
+            </button>
+          </div>
         </div>
 
         <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
