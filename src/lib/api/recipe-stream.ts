@@ -50,6 +50,9 @@ interface EventSlots {
   agent: string
   taskId?: string
   msg: string
+  /** Overrides the outer SSE event name for the kind column when the
+   *  underlying event_added carries a richer inner type. */
+  kindOverride?: string
 }
 
 function summarise(eventName: string, payload: Record<string, unknown>): EventSlots {
@@ -58,9 +61,22 @@ function summarise(eventName: string, payload: Record<string, unknown>): EventSl
   // server provides `body` (human-readable) + `type` (kind) + `actor_id`
   // so we can attribute the line to the correct agent tab.
   if (eventName === 'event.added' || eventName === 'event.modified') {
-    const type = asString(payload.type) || 'event'
+    const rawType = asString(payload.type) || 'event'
+    const actorType = asString(payload.actor_type)
     const actor = asString(payload.actor_id) || 'SYSTEM'
     const taskId = asString(payload.task_id) || undefined
+    // Human follow-ups ride the agent_reply slot per the events.type
+    // CHECK constraint workaround. Re-label so the feed shows the
+    // semantic kind, not the storage kind.
+    const innerKind =
+      typeof (payload.payload as Record<string, unknown> | null | undefined)
+        ?.kind === 'string'
+        ? ((payload.payload as Record<string, unknown>).kind as string)
+        : ''
+    const type =
+      actorType === 'human' && (rawType === 'agent_reply' || innerKind === 'human_followup')
+        ? 'human_followup'
+        : rawType
     // Prefer the rich text in the inner payload (full agent_reply text,
     // tool_result output, thinking content) over the short `body`
     // summary, which backends pre-truncate to ~120 chars and so cuts
@@ -83,6 +99,7 @@ function summarise(eventName: string, payload: Record<string, unknown>): EventSl
       agent: actor,
       taskId,
       msg: head,
+      kindOverride: type,
     }
   }
 
@@ -200,7 +217,7 @@ export function useRecipeStream(recipeId: string | undefined): RecipeEvent[] {
         t: nowStamp(),
         agent: slots.agent,
         taskId: slots.taskId,
-        kind: eventName,
+        kind: slots.kindOverride ?? eventName,
         msg: slots.msg,
       }
       setEvents((cur) => {

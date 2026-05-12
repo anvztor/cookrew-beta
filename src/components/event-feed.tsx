@@ -499,12 +499,20 @@ function historyToRow(row: TaskHistoryEvent): RecipeEvent {
     (typeof inner.content === 'string' && (inner.content as string)) ||
     row.body ||
     ''
+  // Human follow-ups ride the events.type CHECK constraint as
+  // `agent_reply` + `actor_type=human` (no migration needed). The
+  // raw `agent_reply` label would mislead operators reading the feed
+  // — surface them as `human_followup` so the dialog is clear.
+  const isHumanFollowup =
+    row.actor_type === 'human' &&
+    (row.type === 'agent_reply' ||
+      (typeof inner.kind === 'string' && inner.kind === 'human_followup'))
   return {
     id: row.id,
     t: fmtClock(row.created_at),
     agent: row.actor_type === 'human' ? 'human' : row.actor_id || 'SYSTEM',
     taskId: undefined,
-    kind: row.type,
+    kind: isHumanFollowup ? 'human_followup' : row.type,
     msg: text,
   }
 }
