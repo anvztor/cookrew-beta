@@ -726,6 +726,9 @@ export function CrTaskCanvas({
   const onCardDown = (id: string, e: ReactPointerEvent<HTMLDivElement>) => {
     e.stopPropagation()
     if (e.button !== 0) return
+    // Suppress pointerdown’s default focus-shift so dragging a card
+    // does not blur the MissionComposer input. Matches onVPDown.
+    e.preventDefault()
     const cur = pos[id]
     if (!cur) return
     if (e.shiftKey) {
